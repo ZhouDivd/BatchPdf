@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>7.3</LangVersion>
+    <Deterministic>true</Deterministic>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <Acad2022Dir Condition="'$(Acad2022Dir)' == '' and Exists('C:\Program Files\Autodesk\AutoCAD 2022\acdbmgd.dll')">C:\Program Files\Autodesk\AutoCAD 2022</Acad2022Dir>
+    <Acad2022Dir Condition="'$(Acad2022Dir)' == ''">$(MSBuildThisFileDirectory)lib\Acad2022</Acad2022Dir>
+    <Acad2020Dir Condition="'$(Acad2020Dir)' == '' and Exists('C:\Program Files\Autodesk\AutoCAD 2020\acdbmgd.dll')">C:\Program Files\Autodesk\AutoCAD 2020</Acad2020Dir>
+    <Acad2020Dir Condition="'$(Acad2020Dir)' == ''">$(MSBuildThisFileDirectory)lib\Acad2020</Acad2020Dir>
+    <!-- Fallback to installed .NET Framework 4.x runtime assemblies when Developer Pack Reference Assemblies are absent -->
+    <FrameworkPathOverride Condition="!Exists('C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\$(TargetFrameworkVersion)')">C:\Windows\Microsoft.NET\Framework64\v4.0.30319</FrameworkPathOverride>
+  </PropertyGroup>
+</Project>

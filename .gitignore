@@ -1,0 +1,34 @@
+## Visual Studio temporary files and build outputs
+.vs/
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+## Temporary logs and test outputs
+*.log
+*.err
+*.tmp
+*.bak
+plot.log
+TestResults/
+*.csv
+tests/TestDrawings/VerifyPdfOut/
+
+## Test drawings and sample DWGs (contains real project data)
+tests/TestDrawings/
+*.dwg
+*.dxf
+
+## Scratch and local test scripts
+scratch/
+test_headless_out/
+
+## Windows thumbnails and desktop ini
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
