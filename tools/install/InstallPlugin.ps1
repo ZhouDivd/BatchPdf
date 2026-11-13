@@ -41,8 +41,38 @@ if (!(Test-Path $targetDir)) {
 }
 
 try {
-    Copy-Item "$bundleSrc\*" $targetDir -Recurse -Force -ErrorAction Stop
-    Write-Host "    已完成文件同步复制。" -ForegroundColor Green
+    Get-ChildItem -Path $bundleSrc -Recurse | ForEach-Object {
+        $relPath = $_.FullName.Substring($bundleSrc.Length).TrimStart('\', '/')
+        $destPath = Join-Path $targetDir $relPath
+        if ($_.PSIsContainer) {
+            if (!(Test-Path $destPath)) {
+                New-Item -ItemType Directory -Path $destPath -Force | Out-Null
+            }
+        } else {
+            $destFolder = Split-Path -Parent $destPath
+            if (!(Test-Path $destFolder)) {
+                New-Item -ItemType Directory -Path $destFolder -Force | Out-Null
+            }
+            $srcFile = $_.FullName
+            try {
+                Copy-Item $srcFile $destPath -Force -ErrorAction Stop
+            } catch {
+                if (Test-Path $destPath) {
+                    $oldBackup = "$destPath.old"
+                    try {
+                        if (Test-Path $oldBackup) {
+                            Remove-Item $oldBackup -Force -ErrorAction Stop
+                        }
+                    } catch {
+                        $oldBackup = "$destPath.old.$(Get-Date -Format 'yyyyMMddHHmmss')"
+                    }
+                    Move-Item $destPath $oldBackup -Force -ErrorAction Stop
+                }
+                Copy-Item $srcFile $destPath -Force -ErrorAction Stop
+            }
+        }
+    }
+    Write-Host "    已完成文件同步复制（重启 AutoCAD 后即加载最新版本）。" -ForegroundColor Green
 } catch {
     Write-Host "    [失败] 复制文件失败: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "    请确保以管理员权限运行，或确保 AutoCAD 完全退出后再重试。" -ForegroundColor Yellow

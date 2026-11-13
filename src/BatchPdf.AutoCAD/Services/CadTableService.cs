@@ -6,6 +6,7 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
 using BatchPdf.Core.Configuration;
 using BatchPdf.Core.Models;
+using BatchPdf.Core.Services;
 
 namespace BatchPdf.AutoCAD.Services
 {
@@ -56,7 +57,7 @@ namespace BatchPdf.AutoCAD.Services
                     tb.Position = origin;
                     tb.SetDatabaseDefaults();
 
-                    // Estimate scale factor based on drawing units or first sheet scale
+                    // Estimate scale factor based on drawing units or first scaled sheet
                     double scaleFactor = 100.0;
                     var firstScaled = validSheets.FirstOrDefault(s => s.ScaleValue.HasValue && s.ScaleValue.Value > 0);
                     if (firstScaled != null && firstScaled.ScaleValue.HasValue)
@@ -68,15 +69,37 @@ namespace BatchPdf.AutoCAD.Services
                         scaleFactor = settings.DefaultScaleValue;
                     }
 
-                    // Text height: 3.5mm in paper units * scale
-                    double textHeight = Math.Max(2.5, 3.5 * (scaleFactor / 100.0) * 100.0); // e.g. 350 for 1:100
-                    if (scaleFactor == 1.0) textHeight = 3.5;
-                    double titleTextHeight = textHeight * 1.3;
-                    double rowHeight = textHeight * 2.4;
+                    string[] headers = new string[] { "序号", "图号", "图纸名称", "图幅", "比例", "出图日期", "备注" };
+                    string defaultIssueDate = DateTime.Now.ToString("yyyy.MM");
 
+                    var rowStrings = new List<string[]>(validSheets.Count);
+                    for (int r = 0; r < validSheets.Count; r++)
+                    {
+                        var s = validSheets[r];
+                        string paperStr = !string.IsNullOrWhiteSpace(s.TargetPaperLocaleName)
+                            ? ExtractCleanPaperName(s.TargetPaperLocaleName)
+                            : s.FormattedGeometryInfo;
+                        string scaleStr = s.ScaleValue.HasValue && s.ScaleValue.Value > 0
+                            ? string.Format("1:{0:G}", s.ScaleValue.Value)
+                            : (s.FitToPaper ? "Fit" : "-");
+
+                        rowStrings.Add(new[]
+                        {
+                            (r + 1).ToString(),
+                            (s.DrawingNumber ?? "").Trim(),
+                            (s.DrawingName ?? "").Trim(),
+                            (paperStr ?? "").Trim(),
+                            scaleStr,
+                            defaultIssueDate,
+                            ""
+                        });
+                    }
+
+                    DrawingIndexTableLayout layout = DrawingIndexTableLayoutService.ComputeLayout(headers, rowStrings, scaleFactor);
                     int totalRows = validSheets.Count + 1; // Row 0 = Header
-                    int totalCols = 7;                     // 序号, 图号, 图名, 图幅, 比例, 出图日期, 备注
+                    int totalCols = headers.Length;
 
+                    tb.SuppressRegenerateTable(true);
                     tb.SetSize(totalRows, totalCols);
                     tb.GenerateLayout();
 
@@ -90,89 +113,63 @@ namespace BatchPdf.AutoCAD.Services
                     }
                     catch { }
 
-                    // Column widths in drawing units (proportional to standard paper layout)
-                    double unitBase = (scaleFactor == 1.0 ? 1.0 : scaleFactor);
-                    double col0W = 15.0 * unitBase; // 序号
-                    double col1W = 35.0 * unitBase; // 图号
-                    double col2W = 65.0 * unitBase; // 图名
-                    double col3W = 25.0 * unitBase; // 图幅
-                    double col4W = 20.0 * unitBase; // 比例
-                    double col5W = 25.0 * unitBase; // 出图日期
-                    double col6W = 25.0 * unitBase; // 备注
+                    // Normalize table-level default margins if needed, per-cell edges are explicitly set below
+                    tb.SuppressRegenerateTable(false);
+                    tb.SuppressRegenerateTable(true);
 
-                    tb.Columns[0].Width = col0W;
-                    tb.Columns[1].Width = col1W;
-                    tb.Columns[2].Width = col2W;
-                    tb.Columns[3].Width = col3W;
-                    tb.Columns[4].Width = col4W;
-                    tb.Columns[5].Width = col5W;
-                    tb.Columns[6].Width = col6W;
-
-                    string[] headers = new string[] { "序号", "图号", "图纸名称", "图幅", "比例", "出图日期", "备注" };
                     for (int c = 0; c < totalCols; c++)
                     {
-                        tb.Rows[0].Height = rowHeight * 1.1;
+                        tb.Columns[c].Width = layout.ColumnWidths[c];
+                    }
+
+                    tb.Rows[0].Height = layout.RowHeights[0];
+                    for (int c = 0; c < totalCols; c++)
+                    {
                         var cell = tb.Cells[0, c];
+                        ApplyCellMargins(tb, 0, c, layout.HorzMargin, layout.VertMargin);
                         cell.TextString = headers[c];
-                        cell.TextHeight = titleTextHeight;
+                        cell.TextHeight = layout.HeaderTextHeight;
                         cell.Alignment = CellAlignment.MiddleCenter;
                     }
 
-                    string defaultIssueDate = DateTime.Now.ToString("yyyy.MM");
-
-                    for (int r = 0; r < validSheets.Count; r++)
+                    for (int r = 0; r < rowStrings.Count; r++)
                     {
-                        var s = validSheets[r];
                         int rowIdx = r + 1;
-                        tb.Rows[rowIdx].Height = rowHeight;
+                        var cols = rowStrings[r];
+                        tb.Rows[rowIdx].Height = layout.RowHeights[rowIdx];
 
-                        // 0: 序号
-                        var c0 = tb.Cells[rowIdx, 0];
-                        c0.TextString = (r + 1).ToString();
-                        c0.TextHeight = textHeight;
-                        c0.Alignment = CellAlignment.MiddleCenter;
+                        for (int c = 0; c < totalCols; c++)
+                        {
+                            var cell = tb.Cells[rowIdx, c];
+                            ApplyCellMargins(tb, rowIdx, c, layout.HorzMargin, layout.VertMargin);
+                            cell.TextString = cols[c];
+                            cell.TextHeight = layout.DataTextHeight;
+                            cell.Alignment = (c == 2) ? CellAlignment.MiddleLeft : CellAlignment.MiddleCenter;
+                        }
+                    }
 
-                        // 1: 图号
-                        var c1 = tb.Cells[rowIdx, 1];
-                        c1.TextString = s.DrawingNumber ?? "";
-                        c1.TextHeight = textHeight;
-                        c1.Alignment = CellAlignment.MiddleCenter;
+                    tb.SuppressRegenerateTable(false);
+                    tb.RecomputeTableBlock(true);
 
-                        // 2: 图名
-                        var c2 = tb.Cells[rowIdx, 2];
-                        c2.TextString = s.DrawingName ?? "";
-                        c2.TextHeight = textHeight;
-                        c2.Alignment = CellAlignment.MiddleLeft;
-
-                        // 3: 图幅
-                        var c3 = tb.Cells[rowIdx, 3];
-                        string paperStr = !string.IsNullOrWhiteSpace(s.TargetPaperLocaleName)
-                            ? ExtractCleanPaperName(s.TargetPaperLocaleName)
-                            : s.FormattedGeometryInfo;
-                        c3.TextString = paperStr;
-                        c3.TextHeight = textHeight;
-                        c3.Alignment = CellAlignment.MiddleCenter;
-
-                        // 4: 比例
-                        var c4 = tb.Cells[rowIdx, 4];
-                        string scaleStr = s.ScaleValue.HasValue && s.ScaleValue.Value > 0
-                            ? string.Format("1:{0:G}", s.ScaleValue.Value)
-                            : (s.FitToPaper ? "Fit" : "-");
-                        c4.TextString = scaleStr;
-                        c4.TextHeight = textHeight;
-                        c4.Alignment = CellAlignment.MiddleCenter;
-
-                        // 5: 出图日期
-                        var c5 = tb.Cells[rowIdx, 5];
-                        c5.TextString = defaultIssueDate;
-                        c5.TextHeight = textHeight;
-                        c5.Alignment = CellAlignment.MiddleCenter;
-
-                        // 6: 备注
-                        var c6 = tb.Cells[rowIdx, 6];
-                        c6.TextString = "";
-                        c6.TextHeight = textHeight;
-                        c6.Alignment = CellAlignment.MiddleCenter;
+                    // Second pass using AutoCAD's actual font layout metrics: guarantee no row is ever shorter than MinimumHeight
+                    bool adjustedRowHeight = false;
+                    for (int r = 0; r < totalRows; r++)
+                    {
+                        try
+                        {
+                            double minNeeded = tb.Rows[r].MinimumHeight;
+                            double safeMin = minNeeded + layout.VertMargin * 0.4;
+                            if (minNeeded > 0 && tb.Rows[r].Height < safeMin)
+                            {
+                                tb.Rows[r].Height = safeMin;
+                                adjustedRowHeight = true;
+                            }
+                        }
+                        catch { }
+                    }
+                    if (adjustedRowHeight)
+                    {
+                        tb.RecomputeTableBlock(true);
                     }
 
                     space.AppendEntity(tb);
@@ -190,20 +187,31 @@ namespace BatchPdf.AutoCAD.Services
             }
         }
 
+        private static void ApplyCellMargins(Table tb, int row, int col, double horzMargin, double vertMargin)
+        {
+            try
+            {
+                var cell = tb.Cells[row, col];
+                cell.Borders.Left.Margin = horzMargin;
+                cell.Borders.Right.Margin = horzMargin;
+                cell.Borders.Top.Margin = vertMargin;
+                cell.Borders.Bottom.Margin = vertMargin;
+            }
+            catch { }
+        }
+
         private static string ExtractCleanPaperName(string localeName)
         {
             if (string.IsNullOrWhiteSpace(localeName)) return "";
-            // E.g. "ISO full bleed A1 (841.00 x 594.00 毫米)" -> "A1" or "A1加长"
-            int aIdx = localeName.IndexOf("A0", StringComparison.OrdinalIgnoreCase);
-            if (aIdx >= 0) return "A0";
-            aIdx = localeName.IndexOf("A1", StringComparison.OrdinalIgnoreCase);
-            if (aIdx >= 0) return "A1";
-            aIdx = localeName.IndexOf("A2", StringComparison.OrdinalIgnoreCase);
-            if (aIdx >= 0) return "A2";
-            aIdx = localeName.IndexOf("A3", StringComparison.OrdinalIgnoreCase);
-            if (aIdx >= 0) return "A3";
-            aIdx = localeName.IndexOf("A4", StringComparison.OrdinalIgnoreCase);
-            if (aIdx >= 0) return "A4";
+            string suffix = localeName.IndexOf("加长", StringComparison.OrdinalIgnoreCase) >= 0 ? "加长" : "";
+            string[] bases = { "A0", "A1", "A2", "A3", "A4" };
+            foreach (string b in bases)
+            {
+                if (localeName.IndexOf(b, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return b + suffix;
+                }
+            }
 
             return localeName.Split('(')[0].Trim();
         }

@@ -17,21 +17,32 @@ namespace BatchPdf.Core.Services
     {
         public static readonly HashSet<string> IgnoredTitleTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "图名", "图 名", "图  名", "图   名", "图纸名称", "项目图名",
+            "图名", "图 名", "图  名", "图   名", "图纸名称", "项目图名", "工程图名",
             "图号", "图 号", "图  号", "图   号", "图纸编号", "工程编号",
             "比例", "比 例", "比  例", "出图比例", "图纸比例",
-            "日期", "日 期", "设计", "设 计", "制图", "制 图",
-            "校对", "校 对", "审核", "审 核", "审定", "审 定",
-            "项目负责人", "专业负责人", "项目总监",
-            "专业", "专 业", "阶段", "阶 段", "工程名称", "项目名称", "建设单位", "设计单位",
-            "注册章", "出图章", "执业章", "会签", "会签栏",
-            "建筑", "结构", "给排水", "电气", "暖通", "智能化", "施工图", "方案", "初设",
-            "版本", "版次", "REVISION", "REV", "STATUS",
-            "DWG NO", "DWG NO.", "DWG_NO", "DWGNO", "DRAWING NO", "DRAWING NO.", "SHEET NO", "NO", "NO.",
-            "DWG NAME", "DRAWING NAME", "TITLE", "SCALE", "BL",
+            "日期", "日 期", "出图日期", "设计", "设 计", "制图", "制 图", "描图", "描 图",
+            "校对", "校 对", "审核", "审 核", "审定", "审 定", "批准", "批 准", "核定", "核 定", "审查", "审 查",
+            "项目负责人", "专业负责人", "项目总监", "注册建筑师", "注册结构师", "注册工程师",
+            "专业", "专 业", "阶段", "阶 段", "设计阶段", "出图阶段", "工程阶段", "施工图阶段", "方案阶段", "初设阶段", "初步设计",
+            "工程名称", "项目名称", "子项名称", "子项编号", "子项", "分项", "分项名称", "建设单位", "设计单位", "施工图审查",
+            "注册章", "出图章", "执业章", "会签", "会签栏", "图别", "图幅", "工种", "设计号", "工程号", "合同号",
+            "建筑", "结构", "给排水", "电气", "暖通", "智能化", "总图", "施工图", "方案", "初设",
+            "版本", "版次", "备注", "签字", "签名", "实名", "职责", "图纸目录",
+            "REVISION", "REV", "REV.", "STATUS", "STAGE", "PHASE", "DISCIPLINE", "ISSUE", "SUBMISSION",
+            "KEY PLAN", "KEYPLAN", "LEGEND", "LOCATION PLAN", "REMARKS", "REVISION DESCRIPTION", "LEAD CONSULTANT",
+            "JOB", "JOB NO", "JOB NO.", "DRAWING STATUS", "BY",
+            "DWG NO", "DWG NO.", "DWG_NO", "DWGNO", "DRAWING NO", "DRAWING NO.", "DRAWING NUMBER", "DWG NUMBER",
+            "SHEET NO", "SHEET NO.", "SHEET NUMBER", "NO", "NO.", "NUMBER",
+            "DWG NAME", "DRAWING NAME", "DRAWING TITLE", "DWG TITLE", "SHEET NAME", "SHEET TITLE",
+            "TITLE", "TITLE:", "TITLE :", "NAME", "NAME:", "NAME :", "DRAWING", "DWG", "SHEET",
+            "SCALE", "SCALE:", "SCALE :", "BL", "DATE", "PROJECT", "CLIENT", "OWNER",
+            "DESIGN", "DESIGNED", "DESIGNED BY", "DRAWN", "DRAWN BY", "CHECKED", "CHECKED BY", "APPROVED", "APPROVED BY",
+            "CAD", "FILE", "FILENAME", "DESCRIPTION", "TBD", "N/A", "NA",
+            "TITRE", "DESSIN", "NOM DU DESSIN", "TITRE DU PLAN", "ECHELLE", "ÉCHELLE", "PROJET",
             // Common bilingual translations in parentheses or brackets
-            "DRAWING TITLE", "(DRAWING TITLE)", "（DRAWING TITLE）",
+            "(DRAWING TITLE)", "（DRAWING TITLE）",
             "(DRAWING NAME)", "（DRAWING NAME）",
+            "(DWG TITLE)", "（DWG TITLE）", "(DWG NAME)", "（DWG NAME）",
             "(DRAWING NO)", "(DRAWING NO.)", "（DRAWING NO.）", "（DRAWING NO）",
             "(SHEET NO)", "(SHEET NO.)", "（SHEET NO.）",
             "(SCALE)", "（SCALE）",
@@ -70,8 +81,16 @@ namespace BatchPdf.Core.Services
         public static string CleanCadFormatting(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
-            string s = Regex.Replace(raw, @"\\A\d+;|\\f[^;]+;|\\H[^;]+;|\\W[^;]+;|\\C\d+;|\\T[^;]+;|\\Q[^;]+;|\\[LlOoKk]", "");
+            string s = Regex.Replace(
+                raw,
+                @"\\A\d+;|\\f[^;]*;|\\H[^;]*;|\\W[^;]*;|\\C\d+;|\\T[^;]*;|\\Q[^;]*;|\\p[^;]*;|\\[LlOoKk]",
+                "",
+                RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\\S([^;]*);", "$1", RegexOptions.IgnoreCase);
+            s = s.Replace("\\~", " ");
+            s = Regex.Replace(s, @"<br\s*/?>", " ", RegexOptions.IgnoreCase);
             s = s.Replace("{", "").Replace("}", "").Replace("%%c", "Φ").Replace("%%C", "Φ").Replace("%%d", "°").Replace("%%p", "±");
+            s = Regex.Replace(s, @"\s+", " ");
             return s.Trim();
         }
 
@@ -83,7 +102,7 @@ namespace BatchPdf.Core.Services
             if (string.IsNullOrWhiteSpace(text)) return false;
             string s = text.Trim();
             if (s.Length < 2 || s.Length > 35) return false;
-            if (IgnoredTitleTexts.Contains(s)) return false;
+            if (IgnoredTitleTexts.Contains(s) || IsPureLabelEnglishTranslation(s)) return false;
 
             // Reject pure date formats (e.g. 2023-10-25 or 2023.05)
             if (Regex.IsMatch(s, @"^\d{4}[-—_/\.]\d{1,2}(?:[-—_/\.]\d{1,2})?$")) return false;
@@ -103,8 +122,28 @@ namespace BatchPdf.Core.Services
         }
 
         /// <summary>
-        /// Checks whether a text is purely an English translation of a titleblock label
-        /// (e.g. "DRAWING TITLE", "(DRAWING TITLE)", "（DRAWING TITLE）", "DRAWING NO.", "SCALE", "PROJECT NAME").
+        /// Checks whether a text is ignored label text, punctuation-only, or a template placeholder (e.g. "XXXXX", "XX", "Date:", "Key plan").
+        /// </summary>
+        public static bool IsIgnoredOrPlaceholderTitleText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return true;
+            string s = text.Trim();
+            if (IgnoredTitleTexts.Contains(s)) return true;
+
+            string strippedTrailing = Regex.Replace(s, @"[\s:：_\-\./\\]+$", "").Trim();
+            if (string.IsNullOrEmpty(strippedTrailing)) return true;
+            if (IgnoredTitleTexts.Contains(strippedTrailing)) return true;
+
+            // Template placeholders such as "XXXXX", "xxx", "XX", "---", "???"
+            string compact = Regex.Replace(s, @"\s+", "");
+            if (Regex.IsMatch(compact, @"^[X_\-\.\?\*:：/\\]+$", RegexOptions.IgnoreCase)) return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Checks whether a text is purely an English/French translation or fragment of a titleblock label
+        /// (e.g. "DRAWING TITLE", "(DRAWING TITLE)", "（DRAWING TITLE）", "DRAWING", "TITLE :", "DRAWING NO.", "SCALE").
         /// Such texts must NEVER be treated as values for drawing title, number, or scale.
         /// </summary>
         public static bool IsPureLabelEnglishTranslation(string text)
@@ -114,40 +153,76 @@ namespace BatchPdf.Core.Services
             // Strip surrounding brackets: (), （）, [], 【】
             s = Regex.Replace(s, @"^[（\(\[【\s]+|[）\)\]】\s]+$", "");
             s = Regex.Replace(s, @"[\s:：_\-\./\\#]+", " ").Trim().ToUpperInvariant();
+            if (string.IsNullOrEmpty(s)) return true;
 
             return s == "DRAWING TITLE" ||
                    s == "DRAWING NAME" ||
                    s == "DWG TITLE" ||
                    s == "DWG NAME" ||
-                   s == "TITLE" ||
                    s == "SHEET NAME" ||
+                   s == "SHEET TITLE" ||
+                   s == "TITLE" ||
+                   s == "NAME" ||
+                   s == "DRAWING" ||
+                   s == "DWG" ||
+                   s == "SHEET" ||
                    s == "DRAWING NO" ||
                    s == "DRAWING NUMBER" ||
                    s == "DWG NO" ||
+                   s == "DWG NUMBER" ||
                    s == "SHEET NO" ||
+                   s == "SHEET NUMBER" ||
                    s == "NO" ||
+                   s == "NUMBER" ||
                    s == "SCALE" ||
                    s == "DRAWING SCALE" ||
                    s == "BL" ||
                    s == "PROJECT NAME" ||
                    s == "PROJ NAME" ||
+                   s == "PROJECT TITLE" ||
                    s == "PROJECT NO" ||
+                   s == "PROJECT" ||
+                   s == "CLIENT" ||
                    s == "DATE" ||
                    s == "DESIGNED BY" ||
                    s == "DRAWN BY" ||
                    s == "CHECKED BY" ||
                    s == "APPROVED BY" ||
+                   s == "DESIGN" ||
+                   s == "DRAWN" ||
+                   s == "CHECKED" ||
+                   s == "APPROVED" ||
+                   s == "BY" ||
+                   s == "JOB" ||
+                   s == "JOB NO" ||
+                   s == "DRAWING STATUS" ||
+                   s == "KEY PLAN" ||
+                   s == "KEYPLAN" ||
+                   s == "LEGEND" ||
+                   s == "LOCATION PLAN" ||
+                   s == "REMARKS" ||
+                   s == "REVISION DESCRIPTION" ||
+                   s == "LEAD CONSULTANT" ||
                    s == "REV" ||
                    s == "REVISION" ||
                    s == "STATUS" ||
                    s == "STAGE" ||
-                   s == "DISCIPLINE";
+                   s == "PHASE" ||
+                   s == "DISCIPLINE" ||
+                   s == "TITRE" ||
+                   s == "DESSIN" ||
+                   s == "NOM DU DESSIN" ||
+                   s == "TITRE DU PLAN" ||
+                   s == "ECHELLE" ||
+                   s == "ÉCHELLE" ||
+                   s == "PROJET";
         }
 
         /// <summary>
         /// Detects engineering annotations, structural rebar specifications, beam/column tags,
-        /// dimension formulas, or construction notes that must NEVER be misidentified as a drawing title.
-        /// Example: "8%%13222(实心)+6%%13220(空心)", "4Φ20", "%%1328@100/200", "KZ1 600x600".
+        /// figure/table numbers in drawing notes, cross-reference callouts, dimension formulas,
+        /// or construction notes that must NEVER be misidentified as a drawing title.
+        /// Example: "8%%13222(实心)+6%%13220(空心)", "4Φ20", "图10.4.3-1 现浇板留洞构造一", "配筋详平面".
         /// </summary>
         public static bool IsEngineeringDetailOrRebarAnnotation(string text)
         {
@@ -169,8 +244,13 @@ namespace BatchPdf.Core.Services
                 return true;
             }
 
-            // 4. Arithmetic or formula operators common in rebar schedules (e.g. +6, +2, /4, =100)
-            if (s.Contains("+") || s.Contains("=") || s.Contains("*")) return true;
+            // 4. Arithmetic, inequality, or formula operators common in rebar schedules and notes
+            if (s.Contains("+") || s.Contains("=") || s.Contains("*") ||
+                s.Contains("<") || s.Contains(">") || s.Contains("^") ||
+                s.Contains("≤") || s.Contains("≥") || s.Contains("±"))
+            {
+                return true;
+            }
 
             // 5. Cross-section dimensions (e.g. 400x600, 400×600, 300*500)
             if (Regex.IsMatch(s, @"\b\d{2,4}\s*[x×*]\s*\d{2,4}\b", RegexOptions.IgnoreCase)) return true;
@@ -184,29 +264,36 @@ namespace BatchPdf.Core.Services
             // 8. Elevation marks (▽-0.050, ▽+3.600)
             if (s.Contains("▽") || Regex.IsMatch(s, @"^[\+\-]\d+\.\d{2,3}$")) return true;
 
+            // 9. Figure or Table captions inside general notes (e.g. "图8.1.8 ...", "图10.4.3-1 ...", "表10.1.1 ...")
+            if (Regex.IsMatch(s, @"^(?:图|表|附图|附表|Figure|Fig\.?|Table|Tableau)\s*\d", RegexOptions.IgnoreCase)) return true;
+
+            // 10. Cross-reference callouts inside drawings (e.g. "详梁配筋图", "配筋详平面", "详见...", "参见...")
+            if (Regex.IsMatch(s, @"(?:详梁|详墙|详柱|详板|详平面|详见|参见|见图|详图集|配筋详)")) return true;
+
             return false;
         }
 
         /// <summary>
-        /// Checks whether a text string looks like a valid drawing title.
-        /// Requires structural engineering drawing terminology or standard drawing document suffix.
+        /// Checks whether a text string looks like a valid drawing title (Chinese, English, or French).
+        /// Requires structural/architectural engineering drawing terminology or standard drawing document suffix.
         /// </summary>
         public static bool IsLikelyDrawingTitleText(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return false;
             string s = text.Trim();
-            if (s.Length < 2 || s.Length > 50) return false;
-            if (IgnoredTitleTexts.Contains(s)) return false;
+            if (s.Length < 2 || s.Length > 65) return false;
+            if (IsIgnoredOrPlaceholderTitleText(s) || IsPureLabelEnglishTranslation(s)) return false;
 
-            // Reject engineering detail / rebar / section annotations
+            // Reject engineering detail / rebar / section annotations / figure captions
             if (IsEngineeringDetailOrRebarAnnotation(s)) return false;
 
-            // Reject sentences with punctuation, colons, or notes
-            if (s.Contains("：") || s.Contains(":") || s.Contains("。") || s.Contains("；") || s.Contains(";")) return false;
-            if (s.StartsWith("注") || s.StartsWith("1.") || s.StartsWith("2.") || s.StartsWith("3.")) return false;
+            // Reject sentences with punctuation, colons, commas, or notes
+            if (s.Contains("：") || s.Contains(":") || s.Contains("。") || s.Contains("；") || s.Contains(";") || s.Contains("，")) return false;
+            if (s.StartsWith("注") || s.StartsWith("1.") || s.StartsWith("2.") || s.StartsWith("3.") ||
+                s.StartsWith("4.") || s.StartsWith("5.")) return false;
             if (s.StartsWith("（1）") || s.StartsWith("(1)") || s.StartsWith("（2）") || s.StartsWith("(2)")) return false;
 
-            // Reject design institute company info, seals, and approvals
+            // Reject design institute company info, seals, approvals, and prose clauses
             if (s.IndexOf("有限公司", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 s.IndexOf("设计院", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 s.IndexOf("事务所", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -216,7 +303,11 @@ namespace BatchPdf.Core.Services
                 s.IndexOf("执业章", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 s.IndexOf("未盖", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 s.IndexOf("审定", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                s.IndexOf("项目负责", StringComparison.OrdinalIgnoreCase) >= 0)
+                s.IndexOf("项目负责", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                s.IndexOf("的所有", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                s.IndexOf("不应小于", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                s.IndexOf("不小于", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                s.IndexOf("应符合", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 return false;
             }
@@ -227,40 +318,75 @@ namespace BatchPdf.Core.Services
 
             string compacted = Regex.Replace(s, @"\s+", "");
 
-            // 1. Strong match: ends with standard drawing document keyword
+            // 1. Strong match: ends with standard Chinese drawing document keyword
             if (EndsWithDrawingKeyword(compacted)) return true;
 
-            // 2. Contains standard Chinese construction drawing terms
-            return compacted.Contains("平面") ||
-                   compacted.Contains("立面") ||
-                   compacted.Contains("剖面") ||
-                   compacted.Contains("配筋") ||
-                   compacted.Contains("布置") ||
-                   compacted.Contains("详图") ||
-                   compacted.Contains("大样") ||
-                   compacted.Contains("系统图") ||
-                   compacted.Contains("说明") ||
-                   compacted.Contains("目录") ||
-                   compacted.Contains("定位") ||
-                   compacted.Contains("身表") ||
-                   compacted.Contains("截面") ||
-                   compacted.Contains("结构") ||
-                   compacted.Contains("节点") ||
-                   compacted.Contains("基础") ||
-                   compacted.Contains("构件");
+            // 2. Contains specific Chinese construction drawing compound terms
+            if (compacted.Contains("平面图") ||
+                compacted.Contains("立面图") ||
+                compacted.Contains("剖面图") ||
+                compacted.Contains("配筋图") ||
+                compacted.Contains("布置图") ||
+                compacted.Contains("模板图") ||
+                compacted.Contains("定位图") ||
+                compacted.Contains("详图") ||
+                compacted.Contains("大样") ||
+                compacted.Contains("系统图") ||
+                compacted.Contains("总说明") ||
+                compacted.Contains("设计说明") ||
+                compacted.Contains("结构说明") ||
+                compacted.Contains("建筑说明") ||
+                compacted.Contains("施工说明") ||
+                compacted.Contains("目录") ||
+                compacted.Contains("身表") ||
+                compacted.Contains("构件表") ||
+                compacted.Contains("一览表") ||
+                compacted.Contains("材料表"))
+            {
+                return true;
+            }
+
+            // Short clean Chinese title phrases containing core layout words (e.g. "首层平面布置", "二层梁配筋")
+            if (compacted.Length <= 24 &&
+                (compacted.Contains("平面") || compacted.Contains("立面") || compacted.Contains("剖面") ||
+                 compacted.Contains("配筋") || compacted.Contains("布置") || compacted.Contains("定位")))
+            {
+                return true;
+            }
+
+            // 3. English / French drawing title keywords (e.g. "GROUND FLOOR LAYOUT PLAN", "FOUNDATION FRAMING PLAN", "BEAM SCHEDULE")
+            if (Regex.IsMatch(s, @"[A-Za-z]{2,}\s+[A-Za-z]{2,}") &&
+                !Regex.IsMatch(s, @"^(?:NOTE|NOTES|SEE|REFER|ALL|UNLESS|FOR\s+DETAIL)\b", RegexOptions.IgnoreCase))
+            {
+                if (Regex.IsMatch(
+                    s,
+                    @"\b(?:PLAN|PLANS|LAYOUT|ELEVATION|ELEVATIONS|SECTION|SECTIONS|DETAIL|DETAILS|SCHEDULE|SCHEDULES|DIAGRAM|DIAGRAMS|GENERAL\s+NOTES|STRUCTURAL\s+NOTES|DESIGN\s+NOTES|CONSTRUCTION\s+NOTES|DRAWING\s+LIST|DRAWING\s+INDEX|SHEET\s+INDEX|FOUNDATION|FRAMING|REINFORCEMENT|ARRANGEMENT|PROFILE|ISOMETRIC|ROOF|FLOOR|BASEMENT|COLUMN|BEAM|SLAB|WALL|STAIR|STAIRCASE|FOOTING|PILE|COFFRAGE|FERRAILLAGE|COUPE|COUPES|FAÇADE|FACADE|NOTES\s+GÉNÉRALES|SOMMAIRE|NOMENCLATURE)\b",
+                    RegexOptions.IgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public static bool EndsWithDrawingKeyword(string s)
         {
             if (string.IsNullOrWhiteSpace(s)) return false;
             string t = s.Trim();
+            if (Regex.IsMatch(t, @"^(?:图|表|附图|附表)\s*\d")) return false;
+
             // Strip trailing parentheses like (一), （一）, (1), （1）, (二), (2), (A), (B), (大样), (详图)
-            string norm = Regex.Replace(t, @"[\(（][一二三四五六七八九十\d\w\s]+[\)）]$", "").Trim();
+            string norm = Regex.Replace(t, @"[\(（][一二三四五六七八九十\d\w\s\-—~～/]+[\)）]$", "").Trim();
             if (string.IsNullOrWhiteSpace(norm)) norm = t;
 
             return norm.EndsWith("图", StringComparison.Ordinal) ||
                    norm.EndsWith("表", StringComparison.Ordinal) ||
-                   norm.EndsWith("说明", StringComparison.Ordinal) ||
+                   norm.EndsWith("总说明", StringComparison.Ordinal) ||
+                   norm.EndsWith("设计说明", StringComparison.Ordinal) ||
+                   norm.EndsWith("施工说明", StringComparison.Ordinal) ||
+                   norm.EndsWith("结构说明", StringComparison.Ordinal) ||
+                   norm.EndsWith("建筑说明", StringComparison.Ordinal) ||
                    norm.EndsWith("大样", StringComparison.Ordinal) ||
                    norm.EndsWith("详图", StringComparison.Ordinal) ||
                    norm.EndsWith("系统图", StringComparison.Ordinal) ||
@@ -273,9 +399,27 @@ namespace BatchPdf.Core.Services
             if (string.IsNullOrWhiteSpace(layer)) return false;
             return layer.IndexOf("图框", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    layer.IndexOf("TITLE", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   layer.IndexOf("TTLB", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    layer.IndexOf("TK", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    layer.IndexOf("BORDER", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    layer.IndexOf("PUB_TITLE", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Checks whether a point lies inside the standard titleblock regions of a sheet frame
+        /// (bottom-right quadrant, right-hand vertical title strip, or bottom horizontal title strip),
+        /// excluding the interior drawing content canvas.
+        /// </summary>
+        public static bool IsInTitleblockZone(Point2D pos, Extents2D box)
+        {
+            double w = box.Width;
+            double h = box.Height;
+            if (w <= 0 || h <= 0) return true;
+
+            bool isBrCorner = (pos.X >= box.MinX + w * 0.48 && pos.Y <= box.MinY + h * 0.35);
+            bool isRightStrip = (pos.X >= box.MinX + w * 0.75);
+            bool isBottomStrip = (pos.Y <= box.MinY + h * 0.18);
+            return isBrCorner || isRightStrip || isBottomStrip;
         }
 
         /// <summary>
@@ -299,7 +443,7 @@ namespace BatchPdf.Core.Services
             TitleTextItem numberLabelItem = null;
             TitleTextItem scaleLabelItem = null;
 
-            // Direct in-text extraction (e.g. "图名: 首层平面布置图", "图号: 结-01")
+            // Direct in-text extraction (e.g. "图名: 首层平面布置图", "Drawing Title: GROUND FLOOR LAYOUT PLAN", "图号: 结-01")
             foreach (var item in inFrameTexts)
             {
                 if (string.IsNullOrWhiteSpace(item.Text)) continue;
@@ -308,14 +452,22 @@ namespace BatchPdf.Core.Services
                 // Check Drawing Name Label / In-Text
                 if (string.IsNullOrWhiteSpace(frame.ExtractedDrawingName))
                 {
-                    var match = Regex.Match(clean, @"^(?:图\s*名|图\s*纸\s*名\s*称|DWG\s*NAME|DRAWING\s*NAME|SHEET\s*NAME|TITLE)\s*[:：\s/\\-]\s*(.+)$", RegexOptions.IgnoreCase);
-                    if (match.Success)
+                    var match = Regex.Match(
+                        clean,
+                        @"^(?:图\s*名|图\s*纸\s*名\s*称|项\s*目\s*图\s*名|工\s*程\s*图\s*名|DWG\s*NAME|DRAWING\s*NAME|DRAWING\s*TITLE|DWG\s*TITLE|SHEET\s*NAME|SHEET\s*TITLE|TITRE(?:\s*DU\s*PLAN)?|NOM\s*DU\s*DESSIN|TITLE)\s*[:：\s/\\-]+\s*(.+)$",
+                        RegexOptions.IgnoreCase);
+                    if (!match.Success && rules != null)
+                    {
+                        match = TryMatchCustomTagPrefix(clean, rules.SelectMany(r => r.SheetNameTags ?? Enumerable.Empty<string>()));
+                    }
+
+                    if (match != null && match.Success)
                     {
                         string val = match.Groups[1].Value.Trim();
-                        if (IsPureLabelEnglishTranslation(val) || IgnoredTitleTexts.Contains(val))
+                        if (IsPureLabelEnglishTranslation(val) || IsIgnoredOrPlaceholderTitleText(val) || IsAnyLabel(val, rules))
                         {
-                            // Bilingual label like "图名：（DRAWING TITLE）", designate this item as the label item
-                            if (nameLabelItem == null || item.Height > nameLabelItem.Height)
+                            // Bilingual label like "图名：（DRAWING TITLE）" or label with punctuation, designate this item as the label item
+                            if (IsBetterLabelCandidate(item, nameLabelItem, box))
                             {
                                 nameLabelItem = item;
                             }
@@ -325,9 +477,9 @@ namespace BatchPdf.Core.Services
                             frame.ExtractedDrawingName = val;
                         }
                     }
-                    else if (IsDrawingNameLabel(clean))
+                    else if (IsDrawingNameLabel(clean, rules))
                     {
-                        if (nameLabelItem == null || item.Height > nameLabelItem.Height)
+                        if (IsBetterLabelCandidate(item, nameLabelItem, box))
                         {
                             nameLabelItem = item;
                         }
@@ -337,25 +489,34 @@ namespace BatchPdf.Core.Services
                 // Check Drawing Number Label / In-Text
                 if (string.IsNullOrWhiteSpace(frame.ExtractedDrawingNumber))
                 {
-                    var match = Regex.Match(clean, @"^(?:图\s*号|图\s*纸\s*编\s*号|工\s*程\s*编\s*号|DWG\s*NO\.?|DRAWING\s*NO\.?|SHEET\s*NO\.?|NO\.?)\s*[:：\s/\\-]\s*(.+)$", RegexOptions.IgnoreCase);
-                    if (match.Success)
+                    var match = Regex.Match(
+                        clean,
+                        @"^(?:图\s*号|图\s*纸\s*编\s*号|工\s*程\s*编\s*号|DWG\s*NO\.?|DRAWING\s*NO\.?|DRAWING\s*NUMBER|DWG\s*NUMBER|SHEET\s*NO\.?|SHEET\s*NUMBER|NO\.?)\s*[:：\s/\\-]+\s*(.+)$",
+                        RegexOptions.IgnoreCase);
+                    if (!match.Success && rules != null)
+                    {
+                        match = TryMatchCustomTagPrefix(clean, rules.SelectMany(r => r.SheetNumberTags ?? Enumerable.Empty<string>()));
+                    }
+
+                    if (match != null && match.Success)
                     {
                         string val = match.Groups[1].Value.Trim();
-                        if (IsPureLabelEnglishTranslation(val) || IgnoredTitleTexts.Contains(val))
+                        if (IsPureLabelEnglishTranslation(val) || IsIgnoredOrPlaceholderTitleText(val) || IsAnyLabel(val, rules))
                         {
-                            if (numberLabelItem == null || item.Height > numberLabelItem.Height)
+                            if (IsBetterLabelCandidate(item, numberLabelItem, box))
                             {
                                 numberLabelItem = item;
                             }
                         }
-                        else if (!string.IsNullOrWhiteSpace(val) && val.Length >= 1)
+                        else if (!string.IsNullOrWhiteSpace(val) && val.Length >= 1 &&
+                                 (IsDrawingNumberText(val) || Regex.IsMatch(val, @"\d")))
                         {
                             frame.ExtractedDrawingNumber = val;
                         }
                     }
-                    else if (IsDrawingNumberLabel(clean))
+                    else if (IsDrawingNumberLabel(clean, rules))
                     {
-                        if (numberLabelItem == null || item.Height > numberLabelItem.Height)
+                        if (IsBetterLabelCandidate(item, numberLabelItem, box))
                         {
                             numberLabelItem = item;
                         }
@@ -365,13 +526,21 @@ namespace BatchPdf.Core.Services
                 // Check Scale Label / In-Text
                 if (!frame.ExtractedScaleValue.HasValue)
                 {
-                    var match = Regex.Match(clean, @"^(?:比\s*例|出\s*图\s*比\s*例|图\s*纸\s*比\s*例|SCALE|BL)\s*[:：\s/\\-]\s*(.+)$", RegexOptions.IgnoreCase);
-                    if (match.Success)
+                    var match = Regex.Match(
+                        clean,
+                        @"^(?:比\s*例|出\s*图\s*比\s*例|图\s*纸\s*比\s*例|SCALE|BL|ECHELLE|ÉCHELLE)\s*[:：\s/\\-]+\s*(.+)$",
+                        RegexOptions.IgnoreCase);
+                    if (!match.Success && rules != null)
+                    {
+                        match = TryMatchCustomTagPrefix(clean, rules.SelectMany(r => r.ScaleTags ?? Enumerable.Empty<string>()));
+                    }
+
+                    if (match != null && match.Success)
                     {
                         string val = match.Groups[1].Value.Trim();
-                        if (IsPureLabelEnglishTranslation(val) || IgnoredTitleTexts.Contains(val))
+                        if (IsPureLabelEnglishTranslation(val) || IsIgnoredOrPlaceholderTitleText(val) || IsAnyLabel(val, rules))
                         {
-                            if (scaleLabelItem == null || item.Height > scaleLabelItem.Height)
+                            if (IsBetterLabelCandidate(item, scaleLabelItem, box))
                             {
                                 scaleLabelItem = item;
                             }
@@ -386,9 +555,9 @@ namespace BatchPdf.Core.Services
                             }
                         }
                     }
-                    else if (IsScaleLabel(clean))
+                    else if (IsScaleLabel(clean, rules))
                     {
-                        if (scaleLabelItem == null || item.Height > scaleLabelItem.Height)
+                        if (IsBetterLabelCandidate(item, scaleLabelItem, box))
                         {
                             scaleLabelItem = item;
                         }
@@ -396,25 +565,26 @@ namespace BatchPdf.Core.Services
                 }
             }
 
-            // 2. Spatial Proximity: Right-hand side or Below search for detected labels
+            // 2. Spatial Proximity: Right-hand side, Below, or Cell-Centered search for detected labels
             if (string.IsNullOrWhiteSpace(frame.ExtractedDrawingName) && nameLabelItem != null)
             {
                 var valItem = FindNearestNeighborValue(
                     nameLabelItem,
                     inFrameTexts,
                     frame,
-                    cand => !IgnoredTitleTexts.Contains(cand.Text) &&
-                            cand.Text.Length >= 2 && cand.Text.Length <= 55 &&
-                            !IsAnyLabel(cand.Text) &&
+                    cand => !IsIgnoredOrPlaceholderTitleText(cand.Text) &&
+                            cand.Text.Length >= 2 && cand.Text.Length <= 65 &&
+                            !IsAnyLabel(cand.Text, rules) &&
                             !IsPureLabelEnglishTranslation(cand.Text) &&
                             !IsEngineeringDetailOrRebarAnnotation(cand.Text) &&
+                            !IsScaleText(cand.Text) &&
                             !cand.Text.Contains("有限公司") &&
                             !cand.Text.Contains("设计院"),
                     isTitleSearch: true);
 
                 if (valItem != null)
                 {
-                    frame.ExtractedDrawingName = valItem.Text;
+                    frame.ExtractedDrawingName = valItem.Text.Trim();
                 }
             }
 
@@ -424,17 +594,19 @@ namespace BatchPdf.Core.Services
                     numberLabelItem,
                     inFrameTexts,
                     frame,
-                    cand => !IgnoredTitleTexts.Contains(cand.Text) &&
+                    cand => !IsIgnoredOrPlaceholderTitleText(cand.Text) &&
                             cand.Text.Length >= 1 && cand.Text.Length <= 35 &&
-                            !IsAnyLabel(cand.Text) &&
+                            !IsAnyLabel(cand.Text, rules) &&
                             !IsPureLabelEnglishTranslation(cand.Text) &&
                             !IsLikelyDrawingTitleText(cand.Text) &&
-                            (IsDrawingNumberText(cand.Text) || Regex.IsMatch(cand.Text, @"^[A-Za-z0-9\u4e00-\u9fa5\-_#/]{1,30}$")),
+                            !IsScaleText(cand.Text) &&
+                            (IsDrawingNumberText(cand.Text) ||
+                             (Regex.IsMatch(cand.Text, @"\d") && Regex.IsMatch(cand.Text, @"^[A-Za-z0-9\u4e00-\u9fa5\-_#/\.\(\)]{1,30}$"))),
                     isTitleSearch: false);
 
                 if (valItem != null)
                 {
-                    frame.ExtractedDrawingNumber = valItem.Text;
+                    frame.ExtractedDrawingNumber = valItem.Text.Trim();
                 }
             }
 
@@ -453,16 +625,21 @@ namespace BatchPdf.Core.Services
                     if (parsed.HasValue && parsed.Value > 0)
                     {
                         frame.ExtractedScaleValue = parsed.Value;
-                        frame.ExtractedScaleText = valItem.Text;
+                        frame.ExtractedScaleText = valItem.Text.Trim();
                     }
                 }
             }
 
-            // 3. Intelligent Drawing Name Extraction when no explicit label was found
+            // 3. Intelligent Drawing Name Extraction when no explicit label was found or matched
+            //    Strictly restrict to the Titleblock Zone (or top-center General Notes / Directory header)
+            //    so texts from the interior drawing content canvas are NEVER mistakenly picked!
             if (string.IsNullOrWhiteSpace(frame.ExtractedDrawingName))
             {
                 var candidates = inFrameTexts
-                    .Where(t => IsLikelyDrawingTitleText(t.Text))
+                    .Where(t => IsLikelyDrawingTitleText(t.Text) &&
+                                (IsInTitleblockZone(t.Position, box) ||
+                                 (IsTitleLayer(t.Layer) && (t.Position.X >= box.MinX + w * 0.45 || t.Position.Y <= box.MinY + h * 0.25)) ||
+                                 IsTopHeaderGeneralNotesOrIndex(t, box)))
                     .ToList();
 
                 if (candidates.Count > 0)
@@ -492,25 +669,26 @@ namespace BatchPdf.Core.Services
                         if (compacted.Contains("平面") || compacted.Contains("配筋") ||
                             compacted.Contains("布置") || compacted.Contains("详图") ||
                             compacted.Contains("大样") || compacted.Contains("系统") ||
-                            compacted.Contains("身表") || compacted.Contains("说明") ||
-                            compacted.Contains("定位"))
+                            compacted.Contains("身表") || compacted.Contains("总说明") ||
+                            compacted.Contains("设计说明") || compacted.Contains("定位") ||
+                            Regex.IsMatch(clean, @"\b(?:PLAN|LAYOUT|ELEVATION|SECTION|DETAIL|SCHEDULE|NOTES)\b", RegexOptions.IgnoreCase))
                         {
                             score += 300.0;
                         }
 
                         // Titleblock Zone bonus
-                        bool isBrCorner = (t.Position.X >= box.MinX + w * 0.58 && t.Position.Y <= box.MinY + h * 0.28);
-                        bool isRightStrip = (t.Position.X >= box.MinX + w * 0.84);
+                        bool isBrCorner = (t.Position.X >= box.MinX + w * 0.55 && t.Position.Y <= box.MinY + h * 0.28);
+                        bool isRightStrip = (t.Position.X >= box.MinX + w * 0.80);
                         bool isBottomStrip = (t.Position.Y <= box.MinY + h * 0.16);
 
                         if (isBrCorner)
                         {
-                            score += 400.0;
+                            score += 500.0;
                             double distToBr = Math.Sqrt(Math.Pow(t.Position.X - brCornerX, 2) + Math.Pow(t.Position.Y - brCornerY, 2));
                             double diag = Math.Sqrt(w * w + h * h);
                             if (diag > 0)
                             {
-                                score += (1.0 - Math.Min(1.0, distToBr / diag)) * 100.0;
+                                score += (1.0 - Math.Min(1.0, distToBr / diag)) * 120.0;
                             }
                         }
                         else if (isRightStrip || isBottomStrip)
@@ -519,10 +697,10 @@ namespace BatchPdf.Core.Services
                         }
 
                         // Height bonus: larger font in titleblock indicates title vs label
-                        score += Math.Min(t.Height * 1.5, 300.0);
+                        score += Math.Min(t.Height * 2.0, 350.0);
 
-                        // Optimal length bonus (6-28 chars)
-                        if (clean.Length >= 6 && clean.Length <= 28)
+                        // Optimal length bonus (4-40 chars)
+                        if (clean.Length >= 4 && clean.Length <= 40)
                         {
                             score += 50.0;
                         }
@@ -540,27 +718,29 @@ namespace BatchPdf.Core.Services
                 }
             }
 
-            // 4. Drawing Number Standalone Regex Match inside title zone or entire frame
+            // 4. Drawing Number Standalone Regex Match inside titleblock zone
             if (string.IsNullOrWhiteSpace(frame.ExtractedDrawingNumber))
             {
                 var titleZoneTexts = inFrameTexts
-                    .Where(t => (t.Position.X >= box.MinX + w * 0.45 && t.Position.Y <= box.MinY + h * 0.50) ||
-                                (t.Position.Y <= box.MinY + h * 0.20))
+                    .Where(t => IsInTitleblockZone(t.Position, box))
                     .ToList();
 
                 var noCandidate = titleZoneTexts.FirstOrDefault(t => IsDrawingNumberText(t.Text)) ??
-                                  inFrameTexts.FirstOrDefault(t => IsDrawingNumberText(t.Text));
+                                  inFrameTexts.FirstOrDefault(t => IsTitleLayer(t.Layer) && IsDrawingNumberText(t.Text));
 
                 if (noCandidate != null)
                 {
-                    frame.ExtractedDrawingNumber = noCandidate.Text;
+                    frame.ExtractedDrawingNumber = noCandidate.Text.Trim();
                 }
             }
 
             // 5. Scale Validation against Outer Sheet Dimensions
             if (!frame.ExtractedScaleValue.HasValue)
             {
-                var scaleCandidates = inFrameTexts.Where(t => IsScaleText(t.Text)).ToList();
+                var scaleCandidates = inFrameTexts
+                    .OrderByDescending(t => IsInTitleblockZone(t.Position, box) ? 1 : 0)
+                    .Where(t => IsScaleText(t.Text))
+                    .ToList();
                 foreach (var sc in scaleCandidates)
                 {
                     double? parsed = ScaleParser.TryParseScaleValue(sc.Text);
@@ -572,12 +752,56 @@ namespace BatchPdf.Core.Services
                         if (!gbMatch.Contains("x"))
                         {
                             frame.ExtractedScaleValue = parsed.Value;
-                            frame.ExtractedScaleText = sc.Text;
+                            frame.ExtractedScaleText = sc.Text.Trim();
                             break;
                         }
                     }
                 }
             }
+        }
+
+        private static bool IsBetterLabelCandidate(TitleTextItem candidate, TitleTextItem currentBest, Extents2D box)
+        {
+            if (currentBest == null) return true;
+            bool candInZone = IsInTitleblockZone(candidate.Position, box);
+            bool currInZone = IsInTitleblockZone(currentBest.Position, box);
+            if (candInZone && !currInZone) return true;
+            if (!candInZone && currInZone) return false;
+
+            bool candTitleLayer = IsTitleLayer(candidate.Layer);
+            bool currTitleLayer = IsTitleLayer(currentBest.Layer);
+            if (candTitleLayer && !currTitleLayer) return true;
+            if (!candTitleLayer && currTitleLayer) return false;
+
+            return candidate.Height > currentBest.Height;
+        }
+
+        private static bool IsTopHeaderGeneralNotesOrIndex(TitleTextItem t, Extents2D box)
+        {
+            if (t == null || string.IsNullOrWhiteSpace(t.Text)) return false;
+            double w = box.Width;
+            double h = box.Height;
+            if (t.Position.Y < box.MinY + h * 0.80) return false;
+            if (t.Position.X < box.MinX + w * 0.15 || t.Position.X > box.MinX + w * 0.85) return false;
+
+            string s = t.Text.Trim();
+            return s.EndsWith("总说明", StringComparison.Ordinal) ||
+                   s.EndsWith("设计说明", StringComparison.Ordinal) ||
+                   s.EndsWith("目录", StringComparison.Ordinal) ||
+                   Regex.IsMatch(s, @"\b(?:GENERAL\s+NOTES|DRAWING\s+LIST|DRAWING\s+INDEX)\b", RegexOptions.IgnoreCase);
+        }
+
+        private static Match TryMatchCustomTagPrefix(string text, IEnumerable<string> customTags)
+        {
+            if (string.IsNullOrWhiteSpace(text) || customTags == null) return null;
+            foreach (string rawTag in customTags)
+            {
+                if (string.IsNullOrWhiteSpace(rawTag)) continue;
+                string tag = rawTag.Trim();
+                var m = Regex.Match(text, @"^" + Regex.Escape(tag) + @"\s*[:：\s/\\-]+\s*(.+)$", RegexOptions.IgnoreCase);
+                if (m.Success) return m;
+            }
+            return null;
         }
 
         private static TitleTextItem FindNearestNeighborValue(
@@ -607,59 +831,92 @@ namespace BatchPdf.Core.Services
                 double cx = cand.Position.X;
                 double cy = cand.Position.Y;
 
-                // Case 1: Value is to the Right of Label (horizontal row)
+                double candidateScore = double.MaxValue;
+
+                // Case 1: Value is to the Right of Label (same horizontal row)
                 if (cx > lx)
                 {
                     double dx = cx - lx;
                     double dy = Math.Abs(cy - ly);
 
-                    double maxDy = Math.Max(refH * 2.5, 15.0);
-                    double maxDx = Math.Min(frameW * 0.35, Math.Max(refH * 35.0, 120.0));
+                    double maxDy = Math.Max(refH * 3.0, 18.0);
+                    double maxDx = Math.Min(frameW * 0.40, Math.Max(refH * 45.0, 150.0));
 
                     if (dy <= maxDy && dx <= maxDx)
                     {
-                        double score = Math.Sqrt(dx * dx + (dy * 3.5) * (dy * 3.5));
-                        if (isTitleSearch && IsLikelyDrawingTitleText(cand.Text))
-                        {
-                            score *= 0.5;
-                        }
-                        else if (!isTitleSearch && IsDrawingNumberText(cand.Text))
-                        {
-                            score *= 0.5;
-                        }
-                        if (score < bestScore)
-                        {
-                            bestScore = score;
-                            bestCandidate = cand;
-                        }
+                        double s1 = Math.Sqrt(dx * dx + (dy * 3.0) * (dy * 3.0));
+                        if (s1 < candidateScore) candidateScore = s1;
                     }
                 }
 
-                // Case 2: Value is Below Label (vertical column)
+                // Case 2: Value is Below Label (same vertical column)
                 if (cy < ly)
                 {
                     double dy = ly - cy;
                     double dx = Math.Abs(cx - lx);
 
                     double maxDx = Math.Min(frameW * 0.25, Math.Max(refH * 25.0, 100.0));
-                    double maxDy = Math.Min(frameH * 0.18, Math.Max(refH * 15.0, 80.0));
+                    double maxDy = Math.Min(frameH * 0.22, Math.Max(refH * 22.0, 100.0));
 
                     if (dx <= maxDx && dy <= maxDy)
                     {
-                        double score = Math.Sqrt((dx * 2.5) * (dx * 2.5) + dy * dy);
-                        if (isTitleSearch && IsLikelyDrawingTitleText(cand.Text))
+                        double s2 = Math.Sqrt((dx * 2.5) * (dx * 2.5) + dy * dy);
+                        if (s2 < candidateScore) candidateScore = s2;
+                    }
+                }
+
+                // Case 3: Cell-Centered Value inside a Titleblock Box where the Label is at Top-Left of the Cell
+                // (e.g. "Drawing\nTitle :" at top-left and "GROUND FLOOR LAYOUT PLAN" centered in the cell)
+                if (cx >= lx - refH * 2.0 && cy <= ly + refH * 1.5)
+                {
+                    double dx = Math.Max(0.0, cx - lx);
+                    double dy = Math.Max(0.0, ly - cy);
+
+                    double maxDx = Math.Min(frameW * 0.45, Math.Max(refH * 55.0, 220.0));
+                    double maxDy = Math.Min(frameH * 0.28, Math.Max(refH * 35.0, 140.0));
+
+                    if (dx <= maxDx && dy <= maxDy)
+                    {
+                        double s3 = Math.Sqrt(dx * dx + (dy * 1.4) * (dy * 1.4)) * 1.05;
+                        if (s3 < candidateScore) candidateScore = s3;
+                    }
+                }
+
+                if (candidateScore < double.MaxValue)
+                {
+                    if (isTitleSearch)
+                    {
+                        // Strong bonus when the title value has a larger font height than the small cell label
+                        if (cand.Height >= labelItem.Height * 1.2)
                         {
-                            score *= 0.5;
+                            candidateScore *= 0.45;
                         }
-                        else if (!isTitleSearch && IsDrawingNumberText(cand.Text))
+                        if (IsLikelyDrawingTitleText(cand.Text))
                         {
-                            score *= 0.5;
+                            candidateScore *= 0.40;
                         }
-                        if (score < bestScore)
+                        if (IsTitleLayer(cand.Layer))
                         {
-                            bestScore = score;
-                            bestCandidate = cand;
+                            candidateScore *= 0.80;
                         }
+                        // Penalize drawing numbers if they happen to sit near the title label
+                        if (IsDrawingNumberText(cand.Text))
+                        {
+                            candidateScore *= 4.0;
+                        }
+                    }
+                    else
+                    {
+                        if (IsDrawingNumberText(cand.Text) || IsScaleText(cand.Text))
+                        {
+                            candidateScore *= 0.45;
+                        }
+                    }
+
+                    if (candidateScore < bestScore)
+                    {
+                        bestScore = candidateScore;
+                        bestCandidate = cand;
                     }
                 }
             }
@@ -667,53 +924,124 @@ namespace BatchPdf.Core.Services
             return bestCandidate;
         }
 
-        public static bool IsDrawingNameLabel(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return false;
-            string s = Regex.Replace(text, @"[\(（\[【][^\)）\]】]*[\)）\]】]", "");
-            string norm = Regex.Replace(s, @"[\s:：_\-/\\#]+", "").ToUpperInvariant();
-            if (norm == "图名" || norm == "图纸名称" || norm == "项目图名" ||
-                norm == "DWGNAME" || norm == "DRAWINGNAME" || norm == "TITLE" || norm == "SHEETNAME" || norm == "DRAWINGTITLE")
-            {
-                return true;
-            }
-
-            string compact = Regex.Replace(text, @"[\s:：_\-/\\#]+", "").ToUpperInvariant();
-            return compact == "图名DRAWINGTITLE" || compact == "图名DRAWINGNAME" || compact == "图名TITLE";
-        }
-
-        public static bool IsDrawingNumberLabel(string text)
+        public static bool IsDrawingNameLabel(string text, IList<FrameRule> rules = null)
         {
             if (string.IsNullOrWhiteSpace(text)) return false;
             string s = Regex.Replace(text, @"[\(（\[【][^\)）\]】]*[\)）\]】]", "");
             string norm = Regex.Replace(s, @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
-            if (norm == "图号" || norm == "图纸编号" || norm == "工程编号" ||
-                norm == "DWGNO" || norm == "DRAWINGNO" || norm == "SHEETNO" || norm == "NO")
+            if (norm == "图名" || norm == "图纸名称" || norm == "项目图名" || norm == "工程图名" ||
+                norm == "DWGNAME" || norm == "DRAWINGNAME" || norm == "TITLE" || norm == "SHEETNAME" ||
+                norm == "DRAWINGTITLE" || norm == "DWGTITLE" || norm == "SHEETTITLE" ||
+                norm == "TITRE" || norm == "TITREDUPLAN" || norm == "NOMDUDESSIN")
             {
                 return true;
             }
 
             string compact = Regex.Replace(text, @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
-            return compact == "图号DRAWINGNO" || compact == "图号DWGNO" || compact == "图号SHEETNO" || compact == "图号NO";
-        }
-
-        public static bool IsScaleLabel(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return false;
-            string s = Regex.Replace(text, @"[\(（\[【][^\)）\]】]*[\)）\]】]", "");
-            string norm = Regex.Replace(s, @"[\s:：_\-/\\#]+", "").ToUpperInvariant();
-            if (norm == "比例" || norm == "出图比例" || norm == "图纸比例" || norm == "SCALE" || norm == "BL")
+            if (compact == "图名DRAWINGTITLE" || compact == "图名DRAWINGNAME" || compact == "图名TITLE" ||
+                compact == "图纸名称DRAWINGTITLE" || compact == "图纸名称DRAWINGNAME")
             {
                 return true;
             }
 
-            string compact = Regex.Replace(text, @"[\s:：_\-/\\#]+", "").ToUpperInvariant();
-            return compact == "比例SCALE" || compact == "比例BL" || compact == "出图比例SCALE";
+            if (rules != null)
+            {
+                foreach (var r in rules)
+                {
+                    if (r?.SheetNameTags == null) continue;
+                    foreach (var tag in r.SheetNameTags)
+                    {
+                        if (string.IsNullOrWhiteSpace(tag)) continue;
+                        string normTag = Regex.Replace(tag, @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+                        if (!string.IsNullOrEmpty(normTag) && (norm == normTag || compact == normTag))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
         }
 
-        public static bool IsAnyLabel(string text)
+        public static bool IsDrawingNumberLabel(string text, IList<FrameRule> rules = null)
         {
-            return IsDrawingNameLabel(text) || IsDrawingNumberLabel(text) || IsScaleLabel(text);
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            string s = Regex.Replace(text, @"[\(（\[【][^\)）\]】]*[\)）\]】]", "");
+            string norm = Regex.Replace(s, @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+            if (norm == "图号" || norm == "图纸编号" || norm == "工程编号" ||
+                norm == "DWGNO" || norm == "DRAWINGNO" || norm == "DRAWINGNUMBER" || norm == "DWGNUMBER" ||
+                norm == "SHEETNO" || norm == "SHEETNUMBER" || norm == "NO")
+            {
+                return true;
+            }
+
+            string compact = Regex.Replace(text, @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+            if (compact == "图号DRAWINGNO" || compact == "图号DWGNO" || compact == "图号SHEETNO" || compact == "图号NO")
+            {
+                return true;
+            }
+
+            if (rules != null)
+            {
+                foreach (var r in rules)
+                {
+                    if (r?.SheetNumberTags == null) continue;
+                    foreach (var tag in r.SheetNumberTags)
+                    {
+                        if (string.IsNullOrWhiteSpace(tag)) continue;
+                        string normTag = Regex.Replace(tag, @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+                        if (!string.IsNullOrEmpty(normTag) && (norm == normTag || compact == normTag))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        public static bool IsScaleLabel(string text, IList<FrameRule> rules = null)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            string s = Regex.Replace(text, @"[\(（\[【][^\)）\]】]*[\)）\]】]", "");
+            string norm = Regex.Replace(s, @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+            if (norm == "比例" || norm == "出图比例" || norm == "图纸比例" ||
+                norm == "SCALE" || norm == "BL" || norm == "ECHELLE" || norm == "ÉCHELLE")
+            {
+                return true;
+            }
+
+            string compact = Regex.Replace(text, @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+            if (compact == "比例SCALE" || compact == "比例BL" || compact == "出图比例SCALE")
+            {
+                return true;
+            }
+
+            if (rules != null)
+            {
+                foreach (var r in rules)
+                {
+                    if (r?.ScaleTags == null) continue;
+                    foreach (var tag in r.ScaleTags)
+                    {
+                        if (string.IsNullOrWhiteSpace(tag)) continue;
+                        string normTag = Regex.Replace(tag, @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+                        if (!string.IsNullOrEmpty(normTag) && (norm == normTag || compact == normTag))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        public static bool IsAnyLabel(string text, IList<FrameRule> rules = null)
+        {
+            return IsDrawingNameLabel(text, rules) || IsDrawingNumberLabel(text, rules) || IsScaleLabel(text, rules);
         }
     }
 }

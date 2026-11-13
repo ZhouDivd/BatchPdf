@@ -121,48 +121,20 @@ namespace BatchPdf.AutoCAD.Services
                 BlockTable bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
                 BlockTableRecord modelSpace = (BlockTableRecord)tr.GetObject(bt[BlockTableRecord.ModelSpace], OpenMode.ForRead);
                 var layerStates = ReadLayerStates(tr, db);
+                HashSet<string> ruleLayers = GetRuleAllowedLayers(rules, layerStates);
+                HashSet<string> targetBlocks = ParseCsvList(settings.ActiveFrameBlockName);
 
                 if (settings.RecognitionMode == FrameRecognitionMode.ByBlock)
                 {
-                    HashSet<string> targetBlocks = ParseCsvList(settings.ActiveFrameBlockName);
+                    // 1. Scan blocks matching ActiveFrameBlockName or FrameRules.BlockNames / mapped attributes
                     rawCandidates.AddRange(ScanBlocksInternal(
                         tr, modelSpace, layerStates, rules, targetBlocks,
                         allowedLayers: null, requireExplicitMatch: true,
                         includeNonPlottable: includeNonPlottable, minEdge: minEdge,
                         searchRegion: activeSearchRegion));
-                }
-                else
-                {
-                    // Default / ByLayer mode:
-                    // 1. Try user's specified ActiveFrameLayer(s) first
-                    HashSet<string> userLayers = ParseCsvList(settings.ActiveFrameLayer);
-                    HashSet<string> presentUserLayers = FilterPresentFrameLayers(userLayers, layerStates);
-                    bool isSingleSpecificUserLayer = IsSingleSpecificUserLayer(settings.ActiveFrameLayer, userLayers, presentUserLayers);
 
-                    if (presentUserLayers.Count > 0)
-                    {
-                        rawCandidates.AddRange(ScanLayersForFrames(
-                            tr, modelSpace, layerStates, rules, presentUserLayers,
-                            includeNonPlottable, minEdge, activeSearchRegion));
-                    }
-
-                    // 2. If user's specified layer is not in this DWG or yielded 0 frames,
-                    // automatically fall back to built-in frame layers present in this DWG (e.g. BORDER, TK, PUB_TITLE, 图框)
-                    // unless the user explicitly picked a single specific layer that exists in this DWG.
-                    if (rawCandidates.Count == 0 && !isSingleSpecificUserLayer)
-                    {
-                        HashSet<string> autoFrameLayers = DetectFrameLayersInDrawing(layerStates, rules);
-                        if (autoFrameLayers.Count > 0)
-                        {
-                            rawCandidates.AddRange(ScanLayersForFrames(
-                                tr, modelSpace, layerStates, rules, autoFrameLayers,
-                                includeNonPlottable, minEdge, activeSearchRegion));
-                        }
-                    }
-
-                    // 3. Also check if there are explicit titleblock BlockReferences matching FrameRules (e.g. *TK*, *BORDER*, *TITLE*)
-                    // on any visible layer if no polyline/block frames were found on frame layers
-                    if (rawCandidates.Count == 0 && !isSingleSpecificUserLayer)
+                    // 2. If ActiveFrameBlockName was stale (from another DWG) and blocked rule/attribute matches, retry with rules only
+                    if (rawCandidates.Count == 0 && targetBlocks.Count > 0)
                     {
                         rawCandidates.AddRange(ScanBlocksInternal(
                             tr, modelSpace, layerStates, rules, targetBlockNames: null,
@@ -170,7 +142,97 @@ namespace BatchPdf.AutoCAD.Services
                             includeNonPlottable: includeNonPlottable, minEdge: minEdge,
                             searchRegion: activeSearchRegion));
                     }
+
+                    // 3. Fallback: scan sheet-sized BlockReferences on rule/frame layers or all eligible layers
+                    if (rawCandidates.Count == 0)
+                    {
+                        HashSet<string> autoFrameLayers = DetectFrameLayersInDrawing(layerStates, rules);
+                        rawCandidates.AddRange(ScanBlocksInternal(
+                            tr, modelSpace, layerStates, rules, targetBlockNames: null,
+                            allowedLayers: autoFrameLayers.Count > 0 ? autoFrameLayers : null,
+                            requireExplicitMatch: false,
+                            includeNonPlottable: includeNonPlottable, minEdge: minEdge,
+                            searchRegion: activeSearchRegion,
+                            requireSheetLikeSizeWhenUnmatched: true));
+                    }
+
+                    if (rawCandidates.Count == 0)
+                    {
+                        rawCandidates.AddRange(ScanBlocksInternal(
+                            tr, modelSpace, layerStates, rules, targetBlockNames: null,
+                            allowedLayers: null, requireExplicitMatch: false,
+                            includeNonPlottable: includeNonPlottable, minEdge: minEdge,
+                            searchRegion: activeSearchRegion,
+                            requireSheetLikeSizeWhenUnmatched: true));
+                    }
                 }
+                else
+                {
+                    // Default / ByLayer mode:
+                    // 1. Try user's specified ActiveFrameLayer(s) combined with FrameRules.AllowedLayers
+                    HashSet<string> userLayers = ParseCsvList(settings.ActiveFrameLayer);
+                    foreach (string rl in ruleLayers)
+                    {
+                        userLayers.Add(rl);
+                    }
+                    HashSet<string> presentUserLayers = FilterPresentFrameLayers(userLayers, layerStates);
+
+                    if (presentUserLayers.Count > 0)
+                    {
+                        rawCandidates.AddRange(ScanLayersForFrames(
+                            tr, modelSpace, layerStates, rules, presentUserLayers,
+                            includeNonPlottable, minEdge, activeSearchRegion, targetBlocks));
+                    }
+
+                    // 2. Also include any BlockReferences that explicitly match FrameRules.BlockNames
+                    // (even if placed on Layer "0" or another layer not in presentUserLayers)
+                    if (HasExplicitBlockNameRules(rules))
+                    {
+                        rawCandidates.AddRange(ScanBlocksInternal(
+                            tr, modelSpace, layerStates, rules, targetBlockNames: null,
+                            allowedLayers: null, requireExplicitMatch: true,
+                            includeNonPlottable: includeNonPlottable, minEdge: minEdge,
+                            searchRegion: activeSearchRegion));
+                    }
+
+                    // 3. If user's specified layer is not in this DWG or yielded 0 frames,
+                    // automatically fall back to built-in frame layers present in this DWG (e.g. BORDER, TK, PUB_TITLE, 图框)
+                    if (rawCandidates.Count == 0)
+                    {
+                        HashSet<string> autoFrameLayers = DetectFrameLayersInDrawing(layerStates, rules);
+                        if (autoFrameLayers.Count > 0)
+                        {
+                            rawCandidates.AddRange(ScanLayersForFrames(
+                                tr, modelSpace, layerStates, rules, autoFrameLayers,
+                                includeNonPlottable, minEdge, activeSearchRegion, targetBlocks));
+                        }
+                    }
+
+                    // 4. Fallback to explicit titleblock BlockReferences matching FrameRules or sheet-sized blocks
+                    if (rawCandidates.Count == 0)
+                    {
+                        rawCandidates.AddRange(ScanBlocksInternal(
+                            tr, modelSpace, layerStates, rules, targetBlockNames: targetBlocks.Count > 0 ? targetBlocks : null,
+                            allowedLayers: null, requireExplicitMatch: true,
+                            includeNonPlottable: includeNonPlottable, minEdge: minEdge,
+                            searchRegion: activeSearchRegion));
+                    }
+
+                    if (rawCandidates.Count == 0)
+                    {
+                        rawCandidates.AddRange(ScanBlocksInternal(
+                            tr, modelSpace, layerStates, rules, targetBlockNames: null,
+                            allowedLayers: null, requireExplicitMatch: false,
+                            includeNonPlottable: includeNonPlottable, minEdge: minEdge,
+                            searchRegion: activeSearchRegion,
+                            requireSheetLikeSizeWhenUnmatched: true));
+                    }
+                }
+
+                // Filter by FrameRules MinFrameWidth / MinFrameHeight
+                rawCandidates = rawCandidates
+                    .Where(c => MeetsMinFrameDimensions(c.WidthDrawingUnits, c.HeightDrawingUnits, rules, isPaperSpace: false))
+                    .ToList();
 
                 // Filter by search region if user selected a search area
                 if (activeSearchRegion.HasValue)
@@ -234,6 +296,7 @@ namespace BatchPdf.AutoCAD.Services
             using (Transaction tr = db.TransactionManager.StartTransaction())
             {
                 var layerStates = ReadLayerStates(tr, db);
+                HashSet<string> ruleLayers = GetRuleAllowedLayers(rules, layerStates);
                 DBDictionary layoutDict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
 
                 foreach (DBDictionaryEntry entry in layoutDict)
@@ -271,42 +334,73 @@ namespace BatchPdf.AutoCAD.Services
                     }
 
                     var rawInLayout = new List<FrameCandidate>();
+                    HashSet<string> targetBlocks = ParseCsvList(settings.ActiveFrameBlockName);
 
                     // 1. Scan for explicit frame polylines, lines, or blocks in this layout's BlockTableRecord
                     if (settings.RecognitionMode == FrameRecognitionMode.ByBlock)
                     {
-                        HashSet<string> targetBlocks = ParseCsvList(settings.ActiveFrameBlockName);
                         rawInLayout.AddRange(ScanBlocksInternal(
                             tr, layoutBtr, layerStates, rules, targetBlocks,
                             allowedLayers: null, requireExplicitMatch: true,
                             includeNonPlottable: includeNonPlottable, minEdge: minEdge,
                             searchRegion: null));
+
+                        if (rawInLayout.Count == 0 && targetBlocks.Count > 0)
+                        {
+                            rawInLayout.AddRange(ScanBlocksInternal(
+                                tr, layoutBtr, layerStates, rules, targetBlockNames: null,
+                                allowedLayers: null, requireExplicitMatch: true,
+                                includeNonPlottable: includeNonPlottable, minEdge: minEdge,
+                                searchRegion: null));
+                        }
+
+                        if (rawInLayout.Count == 0)
+                        {
+                            rawInLayout.AddRange(ScanBlocksInternal(
+                                tr, layoutBtr, layerStates, rules, targetBlockNames: null,
+                                allowedLayers: null, requireExplicitMatch: false,
+                                includeNonPlottable: includeNonPlottable, minEdge: minEdge,
+                                searchRegion: null,
+                                requireSheetLikeSizeWhenUnmatched: true));
+                        }
                     }
                     else
                     {
                         HashSet<string> userLayers = ParseCsvList(settings.ActiveFrameLayer);
+                        foreach (string rl in ruleLayers)
+                        {
+                            userLayers.Add(rl);
+                        }
                         HashSet<string> presentUserLayers = FilterPresentFrameLayers(userLayers, layerStates);
-                        bool isSingleSpecificUserLayer = IsSingleSpecificUserLayer(settings.ActiveFrameLayer, userLayers, presentUserLayers);
 
                         if (presentUserLayers.Count > 0)
                         {
                             rawInLayout.AddRange(ScanLayersForFrames(
                                 tr, layoutBtr, layerStates, rules, presentUserLayers,
-                                includeNonPlottable, minEdge, null));
+                                includeNonPlottable, minEdge, null, targetBlocks));
                         }
 
-                        if (rawInLayout.Count == 0 && !isSingleSpecificUserLayer)
+                        if (HasExplicitBlockNameRules(rules))
+                        {
+                            rawInLayout.AddRange(ScanBlocksInternal(
+                                tr, layoutBtr, layerStates, rules, targetBlockNames: null,
+                                allowedLayers: null, requireExplicitMatch: true,
+                                includeNonPlottable: includeNonPlottable, minEdge: minEdge,
+                                searchRegion: null));
+                        }
+
+                        if (rawInLayout.Count == 0)
                         {
                             HashSet<string> autoFrameLayers = DetectFrameLayersInDrawing(layerStates, rules);
                             if (autoFrameLayers.Count > 0)
                             {
                                 rawInLayout.AddRange(ScanLayersForFrames(
                                     tr, layoutBtr, layerStates, rules, autoFrameLayers,
-                                    includeNonPlottable, minEdge, null));
+                                    includeNonPlottable, minEdge, null, targetBlocks));
                             }
                         }
 
-                        if (rawInLayout.Count == 0 && !isSingleSpecificUserLayer)
+                        if (rawInLayout.Count == 0)
                         {
                             rawInLayout.AddRange(ScanBlocksInternal(
                                 tr, layoutBtr, layerStates, rules, targetBlockNames: null,
@@ -713,7 +807,8 @@ namespace BatchPdf.AutoCAD.Services
             HashSet<string> targetLayers,
             bool includeNonPlottable,
             double minEdge,
-            Extents2D? searchRegion = null)
+            Extents2D? searchRegion = null,
+            HashSet<string> targetBlockNames = null)
         {
             var candidates = new List<FrameCandidate>();
             var lineSegments = new List<Tuple<Point2D, Point2D, string, string>>();
@@ -728,14 +823,27 @@ namespace BatchPdf.AutoCAD.Services
                 string layer = ent.Layer ?? "";
                 if (!IsLayerEligible(layer, layerStates, includeNonPlottable)) continue;
 
-                bool onTargetLayer = targetLayers.Contains(layer);
+                bool onTargetLayer = targetLayers != null && targetLayers.Contains(layer);
                 if (!onTargetLayer)
                 {
-                    if (ent is BlockReference brCheck &&
-                        BlockDefinitionContainsCurvesOnLayers(
-                            tr, brCheck, targetLayers, layerStates, includeNonPlottable, btrCurveLayerCache))
+                    if (ent is BlockReference brCheck)
                     {
-                        onTargetLayer = true;
+                        string effName = GetEffectiveBlockName(tr, brCheck);
+                        string rawName = brCheck.Name ?? "";
+                        bool matchesExplicitRuleOrTarget =
+                            MatchesAnyBlockNameRule(effName, rawName, rules) ||
+                            (targetBlockNames != null && targetBlockNames.Any(p => WildcardMatch(effName, p) || WildcardMatch(rawName, p)));
+
+                        if (matchesExplicitRuleOrTarget ||
+                            BlockDefinitionContainsCurvesOnLayers(
+                                tr, brCheck, targetLayers, layerStates, includeNonPlottable, btrCurveLayerCache))
+                        {
+                            onTargetLayer = true;
+                        }
+                        else
+                        {
+                            continue;
+                        }
                     }
                     else
                     {
@@ -782,7 +890,7 @@ namespace BatchPdf.AutoCAD.Services
                         continue;
                     }
 
-                    // On an explicit frame layer (or with internal curves on the frame layer),
+                    // On an explicit frame layer (or with internal curves on the frame layer or matching block rule),
                     // accept BlockReferences that have a valid rectangular sheet border
                     var cand = TryExtractBlockCandidate(
                         tr, br, rules, minEdge,
@@ -838,7 +946,8 @@ namespace BatchPdf.AutoCAD.Services
             bool requireExplicitMatch,
             bool includeNonPlottable,
             double minEdge,
-            Extents2D? searchRegion = null)
+            Extents2D? searchRegion = null,
+            bool requireSheetLikeSizeWhenUnmatched = false)
         {
             var results = new List<FrameCandidate>();
             var btrCurveLayerCache = new Dictionary<ObjectId, bool>();
@@ -870,7 +979,7 @@ namespace BatchPdf.AutoCAD.Services
                     tr, br, rules, minEdge,
                     requireRuleOrNameMatch: requireExplicitMatch,
                     targetBlockNames: targetBlockNames,
-                    requireSheetLikeSizeOnLayer: false);
+                    requireSheetLikeSizeOnLayer: requireSheetLikeSizeWhenUnmatched);
                 if (cand != null && (!searchRegion.HasValue || IsEntityInSearchRegion(cand.WcsBoundingBox, searchRegion.Value)))
                 {
                     results.Add(cand);
@@ -999,9 +1108,24 @@ namespace BatchPdf.AutoCAD.Services
             string effectiveName = GetEffectiveBlockName(tr, br);
             string rawName = br.Name ?? "";
 
-            // Never treat anonymous AutoCAD paste blocks (A$C...) as full sheet frames unless explicitly selected by handle
+            bool matchesTargetBlock = false;
+            if (targetBlockNames != null && targetBlockNames.Count > 0)
+            {
+                matchesTargetBlock = targetBlockNames.Any(pattern =>
+                    WildcardMatch(effectiveName, pattern) || WildcardMatch(rawName, pattern));
+            }
+
+            bool matchesBlockNameRule = MatchesAnyBlockNameRule(effectiveName, rawName, rules);
+
+            // Never treat anonymous AutoCAD paste blocks (A$C...) as full sheet frames unless matched by targetBlockNames or FrameRules.BlockNames
             if (effectiveName.StartsWith("A$C", StringComparison.OrdinalIgnoreCase) &&
-                (targetBlockNames == null || !targetBlockNames.Contains(effectiveName)))
+                !matchesTargetBlock && !matchesBlockNameRule)
+            {
+                return null;
+            }
+
+            // If caller specified targetBlockNames, accept blocks matching either targetBlockNames OR explicit FrameRules.BlockNames
+            if (targetBlockNames != null && targetBlockNames.Count > 0 && !matchesTargetBlock && !matchesBlockNameRule)
             {
                 return null;
             }
@@ -1016,18 +1140,6 @@ namespace BatchPdf.AutoCAD.Services
                 out string scaleText,
                 out double? scaleVal);
 
-            bool matchesTargetBlock = false;
-            if (targetBlockNames != null && targetBlockNames.Count > 0)
-            {
-                matchesTargetBlock = targetBlockNames.Any(pattern =>
-                    WildcardMatch(effectiveName, pattern) || WildcardMatch(rawName, pattern));
-                if (!matchesTargetBlock)
-                {
-                    return null;
-                }
-            }
-
-            bool matchesBlockNameRule = MatchesAnyBlockNameRule(effectiveName, rawName, rules);
             bool hasMappedAttributes = !string.IsNullOrWhiteSpace(drawingNo) ||
                                        !string.IsNullOrWhiteSpace(drawingName) ||
                                        !string.IsNullOrWhiteSpace(scaleText);
@@ -1055,12 +1167,18 @@ namespace BatchPdf.AutoCAD.Services
                 return null;
             }
 
-            if (requireSheetLikeSizeOnLayer && !matchesBlockNameRule && !hasMappedAttributes)
+            if (!MeetsMinFrameDimensions(width, height, rules, isPaperSpace: minEdge <= 180.0))
             {
-                // On a frame layer, if a block is a small titlebar (e.g. 7220x40000 or 18000x5000),
-                // its aspect ratio or standard size check will reject it so only true full-sheet blocks pass.
+                return null;
+            }
+
+            if (requireSheetLikeSizeOnLayer && !matchesTargetBlock && !matchesBlockNameRule && !hasMappedAttributes)
+            {
+                // On a frame layer, if a block is a small titlebar or detail symbol,
+                // its standard/lengthened sheet dimension check will reject it so only true full-sheet blocks pass.
                 if (!ScaleParser.TryInferScaleFromAvailableMedia(
-                        width, height, DrawingUnits.Millimeters, null, 10.0, out _, out _))
+                        width, height, DrawingUnits.Millimeters, null, 10.0, out _, out _) &&
+                    !IsPlausibleLengthenedOrStandardSheetSize(width, height))
                 {
                     return null;
                 }
@@ -1125,9 +1243,9 @@ namespace BatchPdf.AutoCAD.Services
         }
 
         /// <summary>
-        /// Scans DBText, MText, and inner titlebar BlockReferences located inside each accepted outer frame
-        /// to automatically populate DrawingName, DrawingNumber, and Scale using spatial proximity
-        /// and geometric heuristics.
+        /// Scans DBText, MText, and inner/outer BlockReferences (both attributes and internal DBText/MText)
+        /// located inside each accepted outer frame to automatically populate DrawingName, DrawingNumber, and Scale
+        /// using spatial proximity and geometric heuristics.
         /// </summary>
         private void EnrichFramesWithTitleblockTexts(
             Transaction tr,
@@ -1154,69 +1272,30 @@ namespace BatchPdf.AutoCAD.Services
 
                 if (ent is DBText dbText)
                 {
-                    string txt = (dbText.TextString ?? "").Trim();
-                    if (!string.IsNullOrWhiteSpace(txt))
-                    {
-                        Point3d pos = dbText.Position;
-                        try
-                        {
-                            Extents3d ext = dbText.GeometricExtents;
-                            pos = new Point3d((ext.MinPoint.X + ext.MaxPoint.X) * 0.5, (ext.MinPoint.Y + ext.MaxPoint.Y) * 0.5, 0);
-                        }
-                        catch { }
-
-                        textItems.Add(new TitleTextItem
-                        {
-                            Position = new Point2D(pos.X, pos.Y),
-                            Text = TitleBlockTextAnalyzer.CleanCadFormatting(txt),
-                            Height = dbText.Height,
-                            Layer = layer
-                        });
-                    }
+                    AddDbTextItem(dbText, Matrix3d.Identity, layer, textItems);
                 }
                 else if (ent is MText mText)
                 {
-                    string txt = (mText.Text ?? mText.Contents ?? "").Trim();
-                    if (!string.IsNullOrWhiteSpace(txt))
-                    {
-                        Point3d pos = mText.Location;
-                        try
-                        {
-                            Extents3d ext = mText.GeometricExtents;
-                            pos = new Point3d((ext.MinPoint.X + ext.MaxPoint.X) * 0.5, (ext.MinPoint.Y + ext.MaxPoint.Y) * 0.5, 0);
-                        }
-                        catch { }
-
-                        foreach (string line in txt.Split(new[] { "\r\n", "\n", "\\P" }, StringSplitOptions.RemoveEmptyEntries))
-                        {
-                            string cleaned = TitleBlockTextAnalyzer.CleanCadFormatting(line);
-                            if (!string.IsNullOrWhiteSpace(cleaned))
-                            {
-                                textItems.Add(new TitleTextItem
-                                {
-                                    Position = new Point2D(pos.X, pos.Y),
-                                    Text = cleaned,
-                                    Height = mText.TextHeight,
-                                    Layer = layer
-                                });
-                            }
-                        }
-                    }
+                    AddMTextItems(mText, Matrix3d.Identity, layer, rules, textItems);
                 }
                 else if (ent is BlockReference br)
                 {
-                    // Check if this is an inner titleblock BlockReference inside one of the outer frames
+                    // Check if this BlockReference is one of the outer frames or an inner titleblock inside one of the outer frames
                     Point2D brPos = new Point2D(br.Position.X, br.Position.Y);
+                    Extents2D? brBox = null;
                     try
                     {
                         Extents3d bExt = br.GeometricExtents;
                         brPos = new Point2D((bExt.MinPoint.X + bExt.MaxPoint.X) * 0.5, (bExt.MinPoint.Y + bExt.MaxPoint.Y) * 0.5);
+                        brBox = new Extents2D(bExt.MinPoint.X, bExt.MinPoint.Y, bExt.MaxPoint.X, bExt.MaxPoint.Y);
                     }
                     catch { }
 
                     var ownerFrame = frames.FirstOrDefault(f =>
-                        f.WcsBoundingBox.MinX <= brPos.X && brPos.X <= f.WcsBoundingBox.MaxX &&
-                        f.WcsBoundingBox.MinY <= brPos.Y && brPos.Y <= f.WcsBoundingBox.MaxY);
+                        string.Equals(f.FrameHandle, br.Handle.ToString(), StringComparison.OrdinalIgnoreCase) ||
+                        (f.WcsBoundingBox.MinX <= brPos.X && brPos.X <= f.WcsBoundingBox.MaxX &&
+                         f.WcsBoundingBox.MinY <= brPos.Y && brPos.Y <= f.WcsBoundingBox.MaxY) ||
+                        (brBox.HasValue && f.WcsBoundingBox.Intersects(brBox.Value, 1.0)));
 
                     if (ownerFrame != null)
                     {
@@ -1235,17 +1314,25 @@ namespace BatchPdf.AutoCAD.Services
                             }
                         }
 
-                        // Also check if the block's effective name itself is a drawing title (e.g. "15-r-1层梁平法施工图")
-                        string effName = GetEffectiveBlockName(tr, br);
-                        if (!string.IsNullOrWhiteSpace(effName) && TitleBlockTextAnalyzer.IsLikelyDrawingTitleText(effName))
+                        // Collect AttributeReferences and internal DBText/MText from this BlockReference into textItems
+                        // so TitleBlockTextAnalyzer can pair labels ("Drawing\nTitle :") and values ("GROUND FLOOR LAYOUT PLAN")
+                        // even when they are inside a block or have unmapped attribute tags!
+                        CollectTextsFromBlockReference(tr, br, Matrix3d.Identity, layer, layerStates, rules, textItems, depth: 0);
+
+                        // Also check if an inner block's effective name itself is a drawing title (e.g. "15-r-1层梁平法施工图")
+                        if (!string.Equals(ownerFrame.FrameHandle, br.Handle.ToString(), StringComparison.OrdinalIgnoreCase))
                         {
-                            textItems.Add(new TitleTextItem
+                            string effName = GetEffectiveBlockName(tr, br);
+                            if (!string.IsNullOrWhiteSpace(effName) && TitleBlockTextAnalyzer.IsLikelyDrawingTitleText(effName))
                             {
-                                Position = brPos,
-                                Text = effName,
-                                Height = 400.0,
-                                Layer = layer
-                            });
+                                textItems.Add(new TitleTextItem
+                                {
+                                    Position = brPos,
+                                    Text = effName,
+                                    Height = 400.0,
+                                    Layer = layer
+                                });
+                            }
                         }
                     }
                 }
@@ -1256,70 +1343,248 @@ namespace BatchPdf.AutoCAD.Services
             foreach (var frame in frames)
             {
                 Extents2D box = frame.WcsBoundingBox;
+                double tol = Math.Max(box.Width, box.Height) * 0.01;
                 var inFrameTexts = textItems
-                    .Where(t => box.MinX <= t.Position.X && t.Position.X <= box.MaxX &&
-                                box.MinY <= t.Position.Y && t.Position.Y <= box.MaxY)
+                    .Where(t => (box.MinX - tol) <= t.Position.X && t.Position.X <= (box.MaxX + tol) &&
+                                (box.MinY - tol) <= t.Position.Y && t.Position.Y <= (box.MaxY + tol))
                     .ToList();
 
                 _textAnalyzer.EnrichFrame(frame, inFrameTexts, rules);
             }
         }
 
-        private static bool IsTitleLayer(string layer)
+        private static void AddDbTextItem(
+            DBText dbText,
+            Matrix3d transform,
+            string effectiveLayer,
+            List<TitleTextItem> textItems)
         {
-            if (string.IsNullOrWhiteSpace(layer)) return false;
-            return layer.IndexOf("图框", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   layer.IndexOf("TITLE", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   layer.IndexOf("TK", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   layer.IndexOf("BORDER", StringComparison.OrdinalIgnoreCase) >= 0;
-        }
+            if (dbText == null) return;
+            string txt = (dbText.TextString ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(txt)) return;
 
-        private static bool IsLikelyDrawingTitleText(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) return false;
-            string s = text.Trim();
-            if (s.Length < 4 || s.Length > 42) return false;
-            if (IgnoredTitleTexts.Contains(s)) return false;
+            string cleaned = TitleBlockTextAnalyzer.CleanCadFormatting(txt);
+            if (string.IsNullOrWhiteSpace(cleaned)) return;
 
-            // Reject pure numbers, scales, dates, or standard notes sentences
-            if (s.Contains("：") || s.Contains(":") || s.Contains("。") || s.Contains("；")) return false;
-            if ( s.StartsWith("注") || s.StartsWith("1.") || s.StartsWith("2.") || s.StartsWith("3.")) return false;
-            if (s.IndexOf("有限公司", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                s.IndexOf("设计院", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                s.IndexOf("专用章", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                s.IndexOf("未盖", StringComparison.OrdinalIgnoreCase) >= 0)
+            Point3d pos = dbText.Position;
+            try
             {
-                return false;
+                Extents3d ext = dbText.GeometricExtents;
+                pos = new Point3d((ext.MinPoint.X + ext.MaxPoint.X) * 0.5, (ext.MinPoint.Y + ext.MaxPoint.Y) * 0.5, 0);
+            }
+            catch { }
+
+            double height = dbText.Height;
+            if (transform != Matrix3d.Identity)
+            {
+                pos = pos.TransformBy(transform);
+                try
+                {
+                    height = new Vector3d(0, dbText.Height, 0).TransformBy(transform).Length;
+                }
+                catch { }
             }
 
-            return EndsWithDrawingKeyword(s) ||
-                   s.Contains("平面") ||
-                   s.Contains("配筋") ||
-                   s.Contains("布置") ||
-                   s.Contains("详图") ||
-                   s.Contains("大样") ||
-                   s.Contains("系统图") ||
-                   s.Contains("剖面") ||
-                   s.Contains("立面") ||
-                   s.Contains("说明") ||
-                   s.Contains("目录");
+            textItems.Add(new TitleTextItem
+            {
+                Position = new Point2D(pos.X, pos.Y),
+                Text = cleaned,
+                Height = Math.Max(height, 1.0),
+                Layer = effectiveLayer
+            });
         }
 
-        private static bool EndsWithDrawingKeyword(string s)
+        private static void AddMTextItems(
+            MText mText,
+            Matrix3d transform,
+            string effectiveLayer,
+            IList<FrameRule> rules,
+            List<TitleTextItem> textItems)
         {
-            return s.EndsWith("图", StringComparison.Ordinal) ||
-                   s.EndsWith("表", StringComparison.Ordinal) ||
-                   s.EndsWith("说明", StringComparison.Ordinal) ||
-                   s.EndsWith("大样", StringComparison.Ordinal) ||
-                   s.EndsWith("目录", StringComparison.Ordinal);
+            if (mText == null) return;
+            string raw = (mText.Contents ?? mText.Text ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(raw)) return;
+
+            Point3d pos = mText.Location;
+            try
+            {
+                Extents3d ext = mText.GeometricExtents;
+                pos = new Point3d((ext.MinPoint.X + ext.MaxPoint.X) * 0.5, (ext.MinPoint.Y + ext.MaxPoint.Y) * 0.5, 0);
+            }
+            catch { }
+
+            double height = mText.TextHeight;
+            if (transform != Matrix3d.Identity)
+            {
+                pos = pos.TransformBy(transform);
+                try
+                {
+                    height = new Vector3d(0, mText.TextHeight, 0).TransformBy(transform).Length;
+                }
+                catch { }
+            }
+            height = Math.Max(height, 1.0);
+
+            string[] rawLines = raw.Split(new[] { "\r\n", "\n", "\\P", "\\p" }, StringSplitOptions.RemoveEmptyEntries);
+            var cleanedLines = new List<string>();
+            foreach (string line in rawLines)
+            {
+                string c = TitleBlockTextAnalyzer.CleanCadFormatting(line);
+                if (!string.IsNullOrWhiteSpace(c))
+                {
+                    cleanedLines.Add(c);
+                }
+            }
+
+            if (cleanedLines.Count == 0) return;
+
+            if (cleanedLines.Count == 1)
+            {
+                textItems.Add(new TitleTextItem
+                {
+                    Position = new Point2D(pos.X, pos.Y),
+                    Text = cleanedLines[0],
+                    Height = height,
+                    Layer = effectiveLayer
+                });
+                return;
+            }
+
+            // When MText has 2-3 short lines (e.g. "Drawing\PTitle :" or "GROUND FLOOR\PLAYOUT PLAN"),
+            // join them into a single coherent phrase first so multi-line labels and multi-line titles stay intact!
+            string joined = string.Join(" ", cleanedLines).Trim();
+            if (cleanedLines.Count <= 3 && joined.Length <= 70)
+            {
+                textItems.Add(new TitleTextItem
+                {
+                    Position = new Point2D(pos.X, pos.Y),
+                    Text = joined,
+                    Height = height,
+                    Layer = effectiveLayer
+                });
+
+                // If the joined text is itself a label (like "Drawing Title :" or "图名 DRAWING TITLE"),
+                // do NOT add the split fragments ("Drawing", "Title :") as separate items at the same point.
+                if (TitleBlockTextAnalyzer.IsAnyLabel(joined, rules) ||
+                    TitleBlockTextAnalyzer.IsPureLabelEnglishTranslation(joined))
+                {
+                    return;
+                }
+            }
+
+            for (int i = 0; i < cleanedLines.Count; i++)
+            {
+                string line = cleanedLines[i];
+                if (TitleBlockTextAnalyzer.IsPureLabelEnglishTranslation(line) && cleanedLines.Count > 1)
+                {
+                    continue;
+                }
+                textItems.Add(new TitleTextItem
+                {
+                    Position = new Point2D(pos.X, pos.Y - i * height * 1.2),
+                    Text = line,
+                    Height = height,
+                    Layer = effectiveLayer
+                });
+            }
         }
 
-        private static string CleanCadFormatting(string raw)
+        private void CollectTextsFromBlockReference(
+            Transaction tr,
+            BlockReference br,
+            Matrix3d parentTransform,
+            string parentLayer,
+            Dictionary<string, LayerStateInfo> layerStates,
+            IList<FrameRule> rules,
+            List<TitleTextItem> textItems,
+            int depth)
         {
-            if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
-            string s = Regex.Replace(raw, @"\\A\d+;|\\f[^;]+;|\\H[^;]+;|\\W[^;]+;|\\C\d+;|\\T[^;]+;|\\Q[^;]+;|\\[LlOoKk]", "");
-            s = s.Replace("{", "").Replace("}", "").Replace("%%c", "Φ").Replace("%%C", "Φ").Replace("%%d", "°").Replace("%%p", "±");
-            return s.Trim();
+            if (br == null || depth > 2) return;
+
+            string brLayer = (!string.IsNullOrWhiteSpace(br.Layer) && br.Layer != "0") ? br.Layer : parentLayer;
+
+            // 1. Collect AttributeReferences attached to this BlockReference
+            if (br.AttributeCollection != null && br.AttributeCollection.Count > 0)
+            {
+                foreach (ObjectId attId in br.AttributeCollection)
+                {
+                    if (attId.IsErased) continue;
+                    AttributeReference attRef = tr.GetObject(attId, OpenMode.ForRead) as AttributeReference;
+                    if (attRef == null || !attRef.Visible) continue;
+
+                    string attLayer = (!string.IsNullOrWhiteSpace(attRef.Layer) && attRef.Layer != "0") ? attRef.Layer : brLayer;
+                    if (layerStates.TryGetValue(attLayer, out LayerStateInfo lsi) && (lsi.IsOff || lsi.IsFrozen))
+                    {
+                        continue;
+                    }
+
+                    string rawTxt = (attRef.IsMTextAttribute && attRef.MTextAttribute != null)
+                        ? (attRef.MTextAttribute.Contents ?? attRef.TextString ?? "")
+                        : (attRef.TextString ?? "");
+                    string cleaned = TitleBlockTextAnalyzer.CleanCadFormatting(rawTxt);
+                    if (string.IsNullOrWhiteSpace(cleaned)) continue;
+
+                    Point3d pos = attRef.Position;
+                    try
+                    {
+                        Extents3d ext = attRef.GeometricExtents;
+                        pos = new Point3d((ext.MinPoint.X + ext.MaxPoint.X) * 0.5, (ext.MinPoint.Y + ext.MaxPoint.Y) * 0.5, 0);
+                    }
+                    catch { }
+
+                    double height = attRef.Height;
+                    if (parentTransform != Matrix3d.Identity)
+                    {
+                        pos = pos.TransformBy(parentTransform);
+                        try
+                        {
+                            height = new Vector3d(0, attRef.Height, 0).TransformBy(parentTransform).Length;
+                        }
+                        catch { }
+                    }
+
+                    textItems.Add(new TitleTextItem
+                    {
+                        Position = new Point2D(pos.X, pos.Y),
+                        Text = cleaned,
+                        Height = Math.Max(height, 1.0),
+                        Layer = attLayer
+                    });
+                }
+            }
+
+            // 2. Collect DBText, MText, and nested BlockReferences inside the BlockTableRecord
+            if (br.BlockTableRecord.IsNull || br.BlockTableRecord.IsErased) return;
+            BlockTableRecord btr = tr.GetObject(br.BlockTableRecord, OpenMode.ForRead) as BlockTableRecord;
+            if (btr == null) return;
+
+            Matrix3d combinedTransform = parentTransform * br.BlockTransform;
+
+            foreach (ObjectId childId in btr)
+            {
+                if (childId.IsErased) continue;
+                Entity child = tr.GetObject(childId, OpenMode.ForRead) as Entity;
+                if (child == null || !child.Visible || child is AttributeDefinition) continue;
+
+                string childLayer = (!string.IsNullOrWhiteSpace(child.Layer) && child.Layer != "0") ? child.Layer : brLayer;
+                if (layerStates.TryGetValue(childLayer, out LayerStateInfo lsi) && (lsi.IsOff || lsi.IsFrozen))
+                {
+                    continue;
+                }
+
+                if (child is DBText dbText)
+                {
+                    AddDbTextItem(dbText, combinedTransform, childLayer, textItems);
+                }
+                else if (child is MText mText)
+                {
+                    AddMTextItems(mText, combinedTransform, childLayer, rules, textItems);
+                }
+                else if (child is BlockReference nestedBr)
+                {
+                    CollectTextsFromBlockReference(tr, nestedBr, combinedTransform, childLayer, layerStates, rules, textItems, depth + 1);
+                }
+            }
         }
 
         private bool TryComputeBlockBoundaryInWcs(
@@ -1345,11 +1610,19 @@ namespace BatchPdf.AutoCAD.Services
             double bestRectArea = 0;
             Point2D[] bestWcsRectCorners = null;
 
-            double minLocalX = double.MaxValue;
-            double minLocalY = double.MaxValue;
-            double maxLocalX = double.MinValue;
-            double maxLocalY = double.MinValue;
-            bool hasLocalExtents = false;
+            double minCurveX = double.MaxValue;
+            double minCurveY = double.MaxValue;
+            double maxCurveX = double.MinValue;
+            double maxCurveY = double.MinValue;
+            bool hasCurveExtents = false;
+
+            double minAllX = double.MaxValue;
+            double minAllY = double.MaxValue;
+            double maxAllX = double.MinValue;
+            double maxAllY = double.MinValue;
+            bool hasAllExtents = false;
+
+            var localLines = new List<Tuple<Point2D, Point2D, string, string>>();
 
             foreach (ObjectId entId in btr)
             {
@@ -1388,40 +1661,93 @@ namespace BatchPdf.AutoCAD.Services
                         }
                     }
                 }
+                else if (ent is Line ln)
+                {
+                    Point3d p1 = ln.StartPoint.TransformBy(transform);
+                    Point3d p2 = ln.EndPoint.TransformBy(transform);
+                    if (p1.DistanceTo(p2) >= minEdge * 0.5)
+                    {
+                        localLines.Add(Tuple.Create(
+                            new Point2D(p1.X, p1.Y),
+                            new Point2D(p2.X, p2.Y),
+                            br.Layer ?? "0",
+                            ln.Handle.ToString()));
+                    }
+                }
 
                 try
                 {
                     Extents3d ext = ent.GeometricExtents;
-                    if (ext.MinPoint.X < minLocalX) minLocalX = ext.MinPoint.X;
-                    if (ext.MinPoint.Y < minLocalY) minLocalY = ext.MinPoint.Y;
-                    if (ext.MaxPoint.X > maxLocalX) maxLocalX = ext.MaxPoint.X;
-                    if (ext.MaxPoint.Y > maxLocalY) maxLocalY = ext.MaxPoint.Y;
-                    hasLocalExtents = true;
+                    if (ext.MinPoint.X < minAllX) minAllX = ext.MinPoint.X;
+                    if (ext.MinPoint.Y < minAllY) minAllY = ext.MinPoint.Y;
+                    if (ext.MaxPoint.X > maxAllX) maxAllX = ext.MaxPoint.X;
+                    if (ext.MaxPoint.Y > maxAllY) maxAllY = ext.MaxPoint.Y;
+                    hasAllExtents = true;
+
+                    if (ent is Curve || ent is BlockReference)
+                    {
+                        if (ext.MinPoint.X < minCurveX) minCurveX = ext.MinPoint.X;
+                        if (ext.MinPoint.Y < minCurveY) minCurveY = ext.MinPoint.Y;
+                        if (ext.MaxPoint.X > maxCurveX) maxCurveX = ext.MaxPoint.X;
+                        if (ext.MaxPoint.Y > maxCurveY) maxCurveY = ext.MaxPoint.Y;
+                        hasCurveExtents = true;
+                    }
                 }
                 catch
                 {
                 }
             }
 
-            Point2D[] rawWcsCorners = null;
-            if (bestWcsRectCorners != null)
+            if (localLines.Count >= 4)
             {
-                rawWcsCorners = bestWcsRectCorners;
+                var lineRects = _geometryAnalyzer.ReconstructRectanglesFromLines(localLines, minEdge);
+                foreach (var lr in lineRects)
+                {
+                    double area = lr.WidthDrawingUnits * lr.HeightDrawingUnits;
+                    if (area > bestRectArea)
+                    {
+                        bestRectArea = area;
+                        bestWcsRectCorners = lr.Corners;
+                    }
+                }
             }
-            else if (hasLocalExtents && (maxLocalX > minLocalX) && (maxLocalY > minLocalY))
-            {
-                Point3d p0 = new Point3d(minLocalX, minLocalY, 0).TransformBy(transform);
-                Point3d p1 = new Point3d(maxLocalX, minLocalY, 0).TransformBy(transform);
-                Point3d p2 = new Point3d(maxLocalX, maxLocalY, 0).TransformBy(transform);
-                Point3d p3 = new Point3d(minLocalX, maxLocalY, 0).TransformBy(transform);
 
-                rawWcsCorners = new Point2D[]
+            Point2D[] extentsWcsCorners = null;
+            double extentsWcsArea = 0;
+
+            bool useCurveBox = hasCurveExtents && (maxCurveX > minCurveX) && (maxCurveY > minCurveY);
+            double minX = useCurveBox ? minCurveX : minAllX;
+            double minY = useCurveBox ? minCurveY : minAllY;
+            double maxX = useCurveBox ? maxCurveX : maxAllX;
+            double maxY = useCurveBox ? maxCurveY : maxAllY;
+
+            if ((useCurveBox || hasAllExtents) && (maxX > minX) && (maxY > minY))
+            {
+                Point3d p0 = new Point3d(minX, minY, 0).TransformBy(transform);
+                Point3d p1 = new Point3d(maxX, minY, 0).TransformBy(transform);
+                Point3d p2 = new Point3d(maxX, maxY, 0).TransformBy(transform);
+                Point3d p3 = new Point3d(minX, maxY, 0).TransformBy(transform);
+
+                extentsWcsCorners = new Point2D[]
                 {
                     new Point2D(p0.X, p0.Y),
                     new Point2D(p1.X, p1.Y),
                     new Point2D(p2.X, p2.Y),
                     new Point2D(p3.X, p3.Y)
                 };
+                extentsWcsArea = p0.DistanceTo(p1) * p1.DistanceTo(p2);
+            }
+
+            Point2D[] rawWcsCorners = null;
+            // Only use an internal closed polyline if its area is at least 50% of the block's curve extents area
+            // (so a small closed polyline around a titleblock cell never overrides the full sheet border!)
+            if (bestWcsRectCorners != null && (extentsWcsArea <= 0 || bestRectArea >= extentsWcsArea * 0.50))
+            {
+                rawWcsCorners = bestWcsRectCorners;
+            }
+            else if (extentsWcsCorners != null)
+            {
+                rawWcsCorners = extentsWcsCorners;
             }
             else
             {
@@ -1521,6 +1847,85 @@ namespace BatchPdf.AutoCAD.Services
             return present;
         }
 
+        private static HashSet<string> GetRuleAllowedLayers(
+            IList<FrameRule> rules,
+            Dictionary<string, LayerStateInfo> layerStates)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (rules == null) return set;
+            foreach (var r in rules)
+            {
+                if (r?.AllowedLayers == null) continue;
+                foreach (string l in r.AllowedLayers)
+                {
+                    if (string.IsNullOrWhiteSpace(l)) continue;
+                    string trimmed = l.Trim();
+                    if (layerStates == null || layerStates.ContainsKey(trimmed))
+                    {
+                        set.Add(trimmed);
+                    }
+                }
+            }
+            return set;
+        }
+
+        private static bool HasExplicitBlockNameRules(IList<FrameRule> rules)
+        {
+            if (rules == null) return false;
+            return rules.Any(r => r?.BlockNames != null && r.BlockNames.Any(b => !string.IsNullOrWhiteSpace(b)));
+        }
+
+        private static bool MeetsMinFrameDimensions(
+            double width,
+            double height,
+            IList<FrameRule> rules,
+            bool isPaperSpace)
+        {
+            if (isPaperSpace)
+            {
+                return width >= 150.0 && height >= 150.0;
+            }
+            if (rules == null || rules.Count == 0)
+            {
+                return width >= 200.0 && height >= 200.0;
+            }
+
+            double ruleMinW = rules.Min(r => r.MinFrameWidth > 0 ? r.MinFrameWidth : 200.0);
+            double ruleMinH = rules.Min(r => r.MinFrameHeight > 0 ? r.MinFrameHeight : 200.0);
+            double reqLong = Math.Max(ruleMinW, ruleMinH);
+            double reqShort = Math.Min(ruleMinW, ruleMinH);
+
+            double actualLong = Math.Max(width, height);
+            double actualShort = Math.Min(width, height);
+
+            return actualLong >= reqLong * 0.95 && actualShort >= reqShort * 0.95;
+        }
+
+        private static bool IsPlausibleLengthenedOrStandardSheetSize(double width, double height)
+        {
+            double shortEdge = Math.Min(width, height);
+            double longEdge = Math.Max(width, height);
+            if (shortEdge <= 0) return false;
+            double ratio = longEdge / shortEdge;
+            if (ratio < 1.15 || ratio > 4.5) return false;
+
+            double[] standardShortEdgesMm = { 210.0, 297.0, 420.0, 594.0, 841.0 };
+            double[] standardScales = { 1.0, 2.0, 5.0, 10.0, 20.0, 25.0, 30.0, 40.0, 50.0, 60.0, 75.0, 80.0, 100.0, 120.0, 125.0, 150.0, 200.0, 250.0, 300.0, 400.0, 500.0, 1000.0 };
+
+            foreach (double sc in standardScales)
+            {
+                double normShort = shortEdge / sc;
+                foreach (double stdMm in standardShortEdgesMm)
+                {
+                    if (Math.Abs(normShort - stdMm) <= stdMm * 0.05)
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         private static HashSet<string> DetectFrameLayersInDrawing(
             Dictionary<string, LayerStateInfo> layerStates,
             IList<FrameRule> rules)
@@ -1591,7 +1996,34 @@ namespace BatchPdf.AutoCAD.Services
         private static Dictionary<string, string> ReadBlockAttributes(Transaction tr, BlockReference br)
         {
             var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (br.AttributeCollection == null) return dict;
+            if (br == null || br.AttributeCollection == null) return dict;
+
+            // Map Tag -> Prompt from AttributeDefinitions in the BlockTableRecord if available
+            var tagToPrompt = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!br.BlockTableRecord.IsNull && !br.BlockTableRecord.IsErased)
+                {
+                    BlockTableRecord btr = tr.GetObject(br.BlockTableRecord, OpenMode.ForRead) as BlockTableRecord;
+                    if (btr != null)
+                    {
+                        foreach (ObjectId entId in btr)
+                        {
+                            if (entId.IsErased) continue;
+                            AttributeDefinition attDef = tr.GetObject(entId, OpenMode.ForRead) as AttributeDefinition;
+                            if (attDef != null && !string.IsNullOrWhiteSpace(attDef.Tag) && !string.IsNullOrWhiteSpace(attDef.Prompt))
+                            {
+                                string cleanPrompt = attDef.Prompt.Trim().TrimEnd(':', '：');
+                                if (!string.IsNullOrWhiteSpace(cleanPrompt))
+                                {
+                                    tagToPrompt[attDef.Tag.Trim()] = cleanPrompt;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
 
             foreach (ObjectId attId in br.AttributeCollection)
             {
@@ -1600,10 +2032,20 @@ namespace BatchPdf.AutoCAD.Services
                 if (attRef != null && !string.IsNullOrWhiteSpace(attRef.Tag))
                 {
                     string tag = attRef.Tag.Trim();
-                    string val = (attRef.TextString ?? string.Empty).Trim();
+                    string rawVal = (attRef.IsMTextAttribute && attRef.MTextAttribute != null)
+                        ? (attRef.MTextAttribute.Contents ?? attRef.TextString ?? string.Empty)
+                        : (attRef.TextString ?? string.Empty);
+                    string val = TitleBlockTextAnalyzer.CleanCadFormatting(rawVal);
+
                     if (!dict.ContainsKey(tag) || string.IsNullOrWhiteSpace(dict[tag]))
                     {
                         dict[tag] = val;
+                    }
+
+                    if (tagToPrompt.TryGetValue(tag, out string promptKey) &&
+                        (!dict.ContainsKey(promptKey) || string.IsNullOrWhiteSpace(dict[promptKey])))
+                    {
+                        dict[promptKey] = val;
                     }
                 }
             }
@@ -1633,15 +2075,33 @@ namespace BatchPdf.AutoCAD.Services
             {
                 if (string.IsNullOrWhiteSpace(drawingNumber) && rule.SheetNumberTags != null)
                 {
-                    drawingNumber = FindFirstMatchingTagValue(attributes, rule.SheetNumberTags);
+                    drawingNumber = FindFirstMatchingTagValue(
+                        attributes,
+                        rule.SheetNumberTags,
+                        val => !TitleBlockTextAnalyzer.IgnoredTitleTexts.Contains(val) &&
+                               !TitleBlockTextAnalyzer.IsPureLabelEnglishTranslation(val) &&
+                               !TitleBlockTextAnalyzer.IsAnyLabel(val, rules) &&
+                               (TitleBlockTextAnalyzer.IsDrawingNumberText(val) || Regex.IsMatch(val, @"\d")));
                 }
                 if (string.IsNullOrWhiteSpace(drawingName) && rule.SheetNameTags != null)
                 {
-                    drawingName = FindFirstMatchingTagValue(attributes, rule.SheetNameTags);
+                    drawingName = FindFirstMatchingTagValue(
+                        attributes,
+                        rule.SheetNameTags,
+                        val => !TitleBlockTextAnalyzer.IgnoredTitleTexts.Contains(val) &&
+                               !TitleBlockTextAnalyzer.IsPureLabelEnglishTranslation(val) &&
+                               !TitleBlockTextAnalyzer.IsAnyLabel(val, rules) &&
+                               !TitleBlockTextAnalyzer.IsEngineeringDetailOrRebarAnnotation(val) &&
+                               val.Length >= 2);
                 }
                 if (string.IsNullOrWhiteSpace(scaleText) && rule.ScaleTags != null)
                 {
-                    scaleText = FindFirstMatchingTagValue(attributes, rule.ScaleTags);
+                    scaleText = FindFirstMatchingTagValue(
+                        attributes,
+                        rule.ScaleTags,
+                        val => !TitleBlockTextAnalyzer.IgnoredTitleTexts.Contains(val) &&
+                               !TitleBlockTextAnalyzer.IsPureLabelEnglishTranslation(val) &&
+                               ScaleParser.TryParseScaleValue(val).HasValue);
                 }
             }
 
@@ -1651,22 +2111,70 @@ namespace BatchPdf.AutoCAD.Services
             }
         }
 
-        private static string FindFirstMatchingTagValue(Dictionary<string, string> attributes, IList<string> candidateTags)
+        private static string FindFirstMatchingTagValue(
+            Dictionary<string, string> attributes,
+            IList<string> candidateTags,
+            Func<string, bool> valueValidator = null)
         {
+            if (attributes == null || candidateTags == null) return null;
+
+            // Pass 1: Exact tag/prompt match
             foreach (string tagPattern in candidateTags)
             {
                 if (string.IsNullOrWhiteSpace(tagPattern)) continue;
-                if (attributes.TryGetValue(tagPattern.Trim(), out string exactVal) && !string.IsNullOrWhiteSpace(exactVal))
+                string key = tagPattern.Trim();
+                if (attributes.TryGetValue(key, out string exactVal) && !string.IsNullOrWhiteSpace(exactVal))
                 {
-                    return exactVal.Trim();
+                    string trimmed = exactVal.Trim();
+                    if (valueValidator == null || valueValidator(trimmed))
+                    {
+                        return trimmed;
+                    }
                 }
+            }
+
+            // Pass 2: Substring match for tags of length >= 2 (excluding project/company tags when matching title/number)
+            foreach (string tagPattern in candidateTags)
+            {
+                if (string.IsNullOrWhiteSpace(tagPattern)) continue;
+                string key = tagPattern.Trim();
+                if (key.Length < 2) continue;
 
                 foreach (var kvp in attributes)
                 {
-                    if (kvp.Key.IndexOf(tagPattern.Trim(), StringComparison.OrdinalIgnoreCase) >= 0 &&
-                        !string.IsNullOrWhiteSpace(kvp.Value))
+                    if (string.IsNullOrWhiteSpace(kvp.Value)) continue;
+                    string attrKey = kvp.Key.Trim();
+
+                    // Avoid matching "PROJECT_NAME" / "工程名称" / "子项名称" when pattern is "NAME" or "TITLE"
+                    if ((attrKey.IndexOf("PROJ", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         attrKey.IndexOf("工程", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         attrKey.IndexOf("项目", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                         attrKey.IndexOf("子项", StringComparison.OrdinalIgnoreCase) >= 0) &&
+                        key.IndexOf("PROJ", StringComparison.OrdinalIgnoreCase) < 0 &&
+                        key.IndexOf("工程", StringComparison.OrdinalIgnoreCase) < 0 &&
+                        key.IndexOf("项目", StringComparison.OrdinalIgnoreCase) < 0)
                     {
-                        return kvp.Value.Trim();
+                        continue;
+                    }
+
+                    // For short 2-char ASCII tags like "NO" or "BL", require word boundary so "NO" doesn't match "NOTE"
+                    bool isMatch;
+                    if (key.Length <= 2 && Regex.IsMatch(key, @"^[A-Za-z]+$"))
+                    {
+                        isMatch = Regex.IsMatch(attrKey, @"(?:^|[_\-\s])" + Regex.Escape(key) + @"(?:$|[_\-\s\d])", RegexOptions.IgnoreCase);
+                    }
+                    else
+                    {
+                        isMatch = attrKey.IndexOf(key, StringComparison.OrdinalIgnoreCase) >= 0;
+                    }
+
+                    if (isMatch)
+                    {
+                        string trimmed = kvp.Value.Trim();
+                        if (valueValidator == null || valueValidator(trimmed))
+                        {
+                            return trimmed;
+                        }
                     }
                 }
             }

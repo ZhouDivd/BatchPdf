@@ -44,6 +44,7 @@
     <Compile Include="Services\NamingService.cs" />
     <Compile Include="Services\SheetPreparationService.cs" />
     <Compile Include="Services\TitleBlockTextAnalyzer.cs" />
+    <Compile Include="Services\DrawingIndexTableLayoutService.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

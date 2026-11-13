@@ -27,7 +27,7 @@
 ## 🚀 快速安装与使用
 
 ### 方式一：一键安装程序（推荐，非开发人员首选）
-1. 从 [Releases](../../releases) 页面下载 `BatchPdfSetup.exe`（单文件仅 ~660 KB）；
+1. 从 [Releases](../../releases) 页面或仓库 [`dist/BatchPdfSetup.exe`](dist/BatchPdfSetup.exe) 下载安装器（单文件约 690 KB）；
 2. 双击运行 `BatchPdfSetup.exe`，点击 **【一键安装到本机】**；
 3. 打开 AutoCAD（2019 ~ 2024），命令行输入 `BPDF` 即可使用！同时桌面会自动生成免开 CAD 极速打印图标。
 
@@ -109,7 +109,7 @@ BatchPdf.sln
 │  ├─ BatchPdf.Installer/          # 一键安装引导程序 (BatchPdfSetup.exe)
 │  └─ headless/                    # 无头打印驱动脚本与上下文菜单注册脚本
 └─ tests/
-   └─ BatchPdf.Core.Tests/         # 24 项核心算法与几何分析全量自动化单元测试
+   └─ BatchPdf.Core.Tests/         # 28 项核心算法、表格排版与图签识别单元测试
 ```
 
 ### 2. 编译命令
@@ -128,7 +128,25 @@ BatchPdf.sln
 ```powershell
 & "bin/Release/Tests/BatchPdf.Core.Tests.exe"
 ```
-确保几何分析、加长图幅匹配、双语图签过滤等 24 项单元测试全部通过。
+确保几何分析、加长图幅匹配、双语图签过滤与目录表自适应布局等 28 项单元测试全部通过。
+
+---
+
+## 📝 更新日志 (Changelog)
+
+### v1.2.1 (2026-11-13)
+* **优化图名/图号识别引擎 (`TitleBlockTextAnalyzer` / `FrameScanner`)**：
+  * 支持纯英文图签与单元格居中排版，修复 `Drawing / Title :` 等分体标签与带空格冒号前缀无法配对图名的问题；
+  * 新增图签区块标题（`Key plan`、`Legend`、`Location Plan`、`Remarks`、`Revision Description`、`Lead Consultant`）及模板占位符（`XXXXX`、`XX` 等）语义过滤；
+  * 排除图纸内容区正文的钢筋标注、图10.x.x/表xx 题注及设计说明长句干扰，并贯通自定义图框规则中的图名/图号/比例标签设置。
+* **修复块图框规则识别**：支持带 `ByLayer` / `ByBlock` 嵌套图形、加长图幅以及属性/普通文字混合块图框的边界识别，同步拾取学习与规则弹窗配置状态。
+* **图纸目录表格文字自适应 (`CadTableService` / `DrawingIndexTableLayoutService`)**：
+  * 根据所有单元格中英文实际文本宽度自动调整列宽（避免图号、长图名折行挤成两排）；
+  * 按换行行数与 AutoCAD `Rows[r].MinimumHeight` 双重自适应行高并统一设置单元格边距，彻底解决超长图名两行重叠问题。
+* **部署脚本稳定性增强 (`InstallPlugin.ps1`)**：修复 AutoCAD 运行占用 DLL 时的备份重命名异常。
+
+### v1.2.0
+* 初始开源版本发布，支持模型/布局空间识图、$A2+1/2$ 等加长图幅纯矢量无损裁白边、免开 CAD 无头批量打印、PDF 书签合并与一键安装分发。
 
 ---
 

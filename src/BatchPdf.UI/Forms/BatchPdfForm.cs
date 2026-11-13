@@ -2380,6 +2380,7 @@ namespace BatchPdf.UI.Forms
                 var rule = _settings.FrameRules[0];
 
                 string effectiveBlockName;
+                string blockLayer;
                 var numTags = new List<string>();
                 var nameTags = new List<string>();
                 var scaleTags = new List<string>();
@@ -2393,6 +2394,7 @@ namespace BatchPdf.UI.Forms
                         return;
                     }
                     effectiveBlockName = FrameScanner.GetEffectiveBlockName(tr, br);
+                    blockLayer = (br.Layer ?? "").Trim();
 
                     foreach (AcDb.ObjectId attId in br.AttributeCollection)
                     {
@@ -2400,7 +2402,7 @@ namespace BatchPdf.UI.Forms
                         if (ar == null || string.IsNullOrWhiteSpace(ar.Tag)) continue;
                         string tag = ar.Tag.Trim();
                         string upper = tag.ToUpperInvariant();
-                        if (tag.Contains("图号") || tag.Contains("编号") || upper.Contains("DWGNO") || upper.Contains("SHEET_NO") || upper == "NO")
+                        if (tag.Contains("图号") || tag.Contains("编号") || upper.Contains("DWGNO") || upper.Contains("DWG_NO") || upper.Contains("SHEET_NO") || upper.Contains("DRAWING_NO") || upper == "NO")
                         {
                             if (!numTags.Contains(tag)) numTags.Add(tag);
                         }
@@ -2420,9 +2422,26 @@ namespace BatchPdf.UI.Forms
                 {
                     rule.BlockNames.Add(effectiveBlockName);
                 }
+                if (!string.IsNullOrWhiteSpace(blockLayer) &&
+                    !string.Equals(blockLayer, "0", StringComparison.OrdinalIgnoreCase) &&
+                    !rule.AllowedLayers.Any(l => string.Equals(l, blockLayer, StringComparison.OrdinalIgnoreCase)))
+                {
+                    rule.AllowedLayers.Add(blockLayer);
+                }
                 foreach (var t in numTags) if (!rule.SheetNumberTags.Any(x => string.Equals(x, t, StringComparison.OrdinalIgnoreCase))) rule.SheetNumberTags.Add(t);
                 foreach (var t in nameTags) if (!rule.SheetNameTags.Any(x => string.Equals(x, t, StringComparison.OrdinalIgnoreCase))) rule.SheetNameTags.Add(t);
                 foreach (var t in scaleTags) if (!rule.ScaleTags.Any(x => string.Equals(x, t, StringComparison.OrdinalIgnoreCase))) rule.ScaleTags.Add(t);
+
+                _isUpdatingUi = true;
+                try
+                {
+                    _cmbBlockList.Text = effectiveBlockName;
+                    _settings.ActiveFrameBlockName = effectiveBlockName;
+                }
+                finally
+                {
+                    _isUpdatingUi = false;
+                }
 
                 _configService.SaveSettings(_settings);
                 ScanModelSpaceFrames();
@@ -2470,6 +2489,27 @@ namespace BatchPdf.UI.Forms
             {
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                 {
+                    // Sync UI layer/block boxes if the user cleared or updated rules so stale single-item text doesn't override rules
+                    if (_settings.FrameRules != null && _settings.FrameRules.Count > 0)
+                    {
+                        var rule = _settings.FrameRules[0];
+                        _isUpdatingUi = true;
+                        try
+                        {
+                            if (rule.BlockNames != null && rule.BlockNames.Count > 0 &&
+                                !string.IsNullOrWhiteSpace(_cmbBlockList.Text) &&
+                                !rule.BlockNames.Any(b => string.Equals(b, _cmbBlockList.Text.Trim(), StringComparison.OrdinalIgnoreCase)))
+                            {
+                                _cmbBlockList.Text = "";
+                                _settings.ActiveFrameBlockName = "";
+                            }
+                        }
+                        finally
+                        {
+                            _isUpdatingUi = false;
+                        }
+                    }
+
                     _configService.SaveSettings(_settings);
                     ScanModelSpaceFrames();
                 }

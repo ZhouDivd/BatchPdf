@@ -42,6 +42,10 @@ namespace BatchPdf.Core.Tests
             RunTest("TitleBlockTextAnalyzer_EnhancedDrawingNumberRegexPatterns", TestTitleBlockTextAnalyzer_EnhancedDrawingNumberRegexPatterns);
             RunTest("TitleBlockTextAnalyzer_RejectsRebarAndDetailAnnotationsInFavorOfRealTitle", TestTitleBlockTextAnalyzer_RejectsRebarAndDetailAnnotationsInFavorOfRealTitle);
             RunTest("TitleBlockTextAnalyzer_BilingualLabelsAndCentering", TestTitleBlockTextAnalyzer_BilingualLabelsAndCentering);
+            RunTest("TitleBlockTextAnalyzer_EnglishCellCenteredAndDrawingContentExclusion", TestTitleBlockTextAnalyzer_EnglishCellCenteredAndDrawingContentExclusion);
+            RunTest("TitleBlockTextAnalyzer_RealWorldKeyPlanAndStackedTitleLabel", TestTitleBlockTextAnalyzer_RealWorldKeyPlanAndStackedTitleLabel);
+            RunTest("TitleBlockTextAnalyzer_CustomFrameRuleTags", TestTitleBlockTextAnalyzer_CustomFrameRuleTags);
+            RunTest("DrawingIndexTableLayoutService_AdaptiveColumnWidthAndRowHeight", TestDrawingIndexTableLayoutService_AdaptiveColumnWidthAndRowHeight);
             RunTest("SheetPreparationService_PaperSpaceLayoutSupport", TestSheetPreparationService_PaperSpaceLayoutSupport);
 
             Console.WriteLine("---------------------------------------------------------");
@@ -1134,6 +1138,193 @@ startxref
             AssertTrue(sheet.TargetPaperCanonicalName == "ISO_A1_(841.00_x_594.00_MM)", "Should match ISO A1");
             AssertTrue(sheet.DrawingNumber == "结-01", "Drawing number should match");
             AssertTrue(sheet.DrawingName == "二层结构平面布置图", "Drawing name should match");
+        }
+
+        private static void TestTitleBlockTextAnalyzer_EnglishCellCenteredAndDrawingContentExclusion()
+        {
+            var analyzer = new TitleBlockTextAnalyzer();
+            // A1 frame at 1:100 scale: 84100 x 59400
+            var frame = new FrameCandidate
+            {
+                Corners = new Point2D[]
+                {
+                    new Point2D(0, 0),
+                    new Point2D(84100, 0),
+                    new Point2D(84100, 59400),
+                    new Point2D(0, 59400)
+                },
+                WcsBoundingBox = new Extents2D(0, 0, 84100, 59400),
+                WidthDrawingUnits = 84100.0,
+                HeightDrawingUnits = 59400.0
+            };
+
+            // Matches user's screenshot:
+            // Top-left of titleblock cell has "Drawing" (Height=180) and "Title :" (Height=180)
+            // Center of the cell (dx ≈ 20.6 * refH, dy ≈ 21.5 * refH) has "GROUND FLOOR LAYOUT PLAN" (Height=460)
+            // Meanwhile, the interior drawing content canvas has various Chinese & English notes/captions that must NOT be picked!
+            var texts = new List<TitleTextItem>
+            {
+                // Drawing content area distractions (middle of sheet):
+                new TitleTextItem { Position = new Point2D(25000, 35000), Text = "图10.4.3-1 现浇板留洞构造一", Height = 500, Layer = "S-TEXT" },
+                new TitleTextItem { Position = new Point2D(30000, 30000), Text = "配筋详平面", Height = 500, Layer = "S-TEXT" },
+                new TitleTextItem { Position = new Point2D(35000, 28000), Text = "除二a类环境类别外的所有构件", Height = 450, Layer = "S-TEXT" },
+                new TitleTextItem { Position = new Point2D(40000, 40000), Text = "二层结构平面图", Height = 600, Layer = "S-TEXT" },
+
+                // Titleblock cell at bottom-right:
+                new TitleTextItem { Position = new Point2D(68000, 8200), Text = "Drawing", Height = 180, Layer = "S-ANNO-TTLB" },
+                new TitleTextItem { Position = new Point2D(68000, 7900), Text = "Title :", Height = 180, Layer = "S-ANNO-TTLB" },
+                new TitleTextItem { Position = new Point2D(71700, 4030), Text = "GROUND FLOOR LAYOUT PLAN", Height = 460, Layer = "S-ANNO-TTLB" },
+
+                // Drawing number cell with "设计阶段" nearby (must not pick "设计阶段" as drawing number):
+                new TitleTextItem { Position = new Point2D(76000, 3500), Text = "Drawing No.", Height = 180, Layer = "S-ANNO-TTLB" },
+                new TitleTextItem { Position = new Point2D(76200, 3000), Text = "设计阶段", Height = 200, Layer = "S-ANNO-TTLB" },
+                new TitleTextItem { Position = new Point2D(78500, 2500), Text = "S-101", Height = 300, Layer = "S-ANNO-TTLB" }
+            };
+
+            analyzer.EnrichFrame(frame, texts, null);
+            AssertTrue(frame.ExtractedDrawingName == "GROUND FLOOR LAYOUT PLAN",
+                "Expected 'GROUND FLOOR LAYOUT PLAN', got: " + frame.ExtractedDrawingName);
+            AssertTrue(frame.ExtractedDrawingNumber == "S-101",
+                "Expected 'S-101' (and never '设计阶段'), got: " + frame.ExtractedDrawingNumber);
+        }
+
+        private static void TestTitleBlockTextAnalyzer_CustomFrameRuleTags()
+        {
+            var analyzer = new TitleBlockTextAnalyzer();
+            var frame = new FrameCandidate
+            {
+                Corners = new Point2D[]
+                {
+                    new Point2D(0, 0),
+                    new Point2D(84100, 0),
+                    new Point2D(84100, 59400),
+                    new Point2D(0, 59400)
+                },
+                WcsBoundingBox = new Extents2D(0, 0, 84100, 59400),
+                WidthDrawingUnits = 84100.0,
+                HeightDrawingUnits = 59400.0
+            };
+
+            var rules = new List<FrameRule>
+            {
+                new FrameRule
+                {
+                    SheetNameTags = new List<string> { "CUSTOM_T_LABEL" },
+                    SheetNumberTags = new List<string> { "CUSTOM_NO_LABEL" },
+                    ScaleTags = new List<string> { "CUSTOM_SC_LABEL" }
+                }
+            };
+
+            var texts = new List<TitleTextItem>
+            {
+                new TitleTextItem { Position = new Point2D(70000, 5000), Text = "CUSTOM_T_LABEL", Height = 200, Layer = "TK" },
+                new TitleTextItem { Position = new Point2D(73000, 5000), Text = "ROOF FRAMING PLAN", Height = 350, Layer = "TK" },
+                new TitleTextItem { Position = new Point2D(70000, 3000), Text = "CUSTOM_NO_LABEL: ST-205", Height = 200, Layer = "TK" },
+                new TitleTextItem { Position = new Point2D(70000, 1500), Text = "CUSTOM_SC_LABEL: 1:150", Height = 200, Layer = "TK" }
+            };
+
+            analyzer.EnrichFrame(frame, texts, rules);
+            AssertTrue(frame.ExtractedDrawingName == "ROOF FRAMING PLAN",
+                "Custom SheetNameTags should match 'ROOF FRAMING PLAN', got: " + frame.ExtractedDrawingName);
+            AssertTrue(frame.ExtractedDrawingNumber == "ST-205",
+                "Custom SheetNumberTags should match 'ST-205', got: " + frame.ExtractedDrawingNumber);
+            AssertClose(frame.ExtractedScaleValue ?? 0, 150.0, 0.01, "Custom ScaleTags should match 1:150");
+        }
+
+        private static void TestTitleBlockTextAnalyzer_RealWorldKeyPlanAndStackedTitleLabel()
+        {
+            var analyzer = new TitleBlockTextAnalyzer();
+            var frame = new FrameCandidate
+            {
+                Corners = new Point2D[]
+                {
+                    new Point2D(-32994.6, 747713.1),
+                    new Point2D(323805.4, 747713.1),
+                    new Point2D(323805.4, 915913.1),
+                    new Point2D(-32994.6, 915913.1)
+                },
+                WcsBoundingBox = new Extents2D(-32994.6, 747713.1, 323805.4, 915913.1),
+                WidthDrawingUnits = 356800.0,
+                HeightDrawingUnits = 168200.0
+            };
+
+            var rules = BatchPdfSettings.CreateDefault().FrameRules;
+
+            // Exact reproduction of real DWG FRAME0 where "Key plan" on layer "图框" previously beat
+            // "UPPER ROOF FLOOR LAYOUT PLAN" on layer "S-ANNO-TEXT" because "Title :" captured ":" in Step 1 regex.
+            var texts = new List<TitleTextItem>
+            {
+                new TitleTextItem { Position = new Point2D(293974.5, 911285.2), Text = "Legend", Height = 400.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(295197.5, 884519.2), Text = "Key plan", Height = 400.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(294423.5, 782023.7), Text = "Drawing", Height = 400.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(293926.4, 781375.5), Text = "Title :", Height = 400.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(294062.7, 792023.7), Text = "Project:", Height = 400.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(306847.7, 787881.3), Text = "XXXXX", Height = 1500.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(300922.7, 798801.3), Text = "10 Anson Road, #05-01, International Plaza, Singapore 079903", Height = 400.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(305530.2, 827225.1), Text = "60% TENDER DRAWING FOR CLIENT REVIEW", Height = 372.8, Layer = "明细表图形" },
+                new TitleTextItem { Position = new Point2D(293806.2, 753597.0), Text = "No. :", Height = 400.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(301055.0, 756282.3), Text = "IRIS3-DD-STR-DRG-250", Height = 800.0, Layer = "S-ANNO-TEXT" },
+                new TitleTextItem { Position = new Point2D(306876.9, 775437.4), Text = "UPPER ROOF FLOOR LAYOUT PLAN", Height = 1000.0, Layer = "S-ANNO-TEXT" }
+            };
+
+            analyzer.EnrichFrame(frame, texts, rules);
+            AssertTrue(frame.ExtractedDrawingName == "UPPER ROOF FLOOR LAYOUT PLAN",
+                "Should extract 'UPPER ROOF FLOOR LAYOUT PLAN' and never 'Key plan' or 'XXXXX', got: " + frame.ExtractedDrawingName);
+            AssertTrue(frame.ExtractedDrawingNumber == "IRIS3-DD-STR-DRG-250",
+                "Should extract 'IRIS3-DD-STR-DRG-250', got: " + frame.ExtractedDrawingNumber);
+
+            // Also verify Step 3 fallback (without any "Title :" label) does not pick "Key plan"
+            var frameNoLabel = new FrameCandidate
+            {
+                Corners = frame.Corners,
+                WcsBoundingBox = frame.WcsBoundingBox,
+                WidthDrawingUnits = frame.WidthDrawingUnits,
+                HeightDrawingUnits = frame.HeightDrawingUnits
+            };
+            var textsNoLabel = texts.FindAll(t => t.Text != "Title :" && t.Text != "Drawing");
+            analyzer.EnrichFrame(frameNoLabel, textsNoLabel, rules);
+            AssertTrue(frameNoLabel.ExtractedDrawingName == "UPPER ROOF FLOOR LAYOUT PLAN",
+                "Fallback without 'Title :' label should still extract 'UPPER ROOF FLOOR LAYOUT PLAN', got: " + frameNoLabel.ExtractedDrawingName);
+        }
+
+        private static void TestDrawingIndexTableLayoutService_AdaptiveColumnWidthAndRowHeight()
+        {
+            string[] headers = { "序号", "图号", "图纸名称", "图幅", "比例", "出图日期", "备注" };
+
+            // Case 1: Real English + Chinese drawing names at 1:200
+            var rows = new List<string[]>
+            {
+                new[] { "1", "IRIS3-DD-STR-DRG-250", "UPPER ROOF FLOOR LAYOUT PLAN", "A1", "1:200", "2026.11", "" },
+                new[] { "2", "IRIS3-DD-STR-DRG-200", "PILE CAP & FOOTING PLAN", "A1", "1:200", "2026.11", "" },
+                new[] { "3", "结-03", "地下室顶板结构平面布置图", "A1加长", "1:200", "2026.11", "" }
+            };
+
+            var layout = DrawingIndexTableLayoutService.ComputeLayout(headers, rows, 200.0);
+            AssertTrue(layout.ColumnWidths.Length == 7, "Should compute 7 column widths");
+            AssertTrue(layout.ColumnWidths[1] > 35.0 * 200.0,
+                "Drawing number column should widen past legacy 7000, got: " + layout.ColumnWidths[1]);
+            AssertTrue(layout.ColumnWidths[2] > 65.0 * 200.0,
+                "Drawing name column should widen past legacy 13000, got: " + layout.ColumnWidths[2]);
+            AssertTrue(layout.RowMaxLineCounts[1] == 1,
+                "UPPER ROOF FLOOR LAYOUT PLAN should fit on 1 line, got lines=" + layout.RowMaxLineCounts[1]);
+
+            // Case 2: Ultra-long title exceeds column cap and multi-line explicit break must expand row height cleanly
+            var longRows = new List<string[]>
+            {
+                new[] { "1", "S-101", "GROUND FLOOR PLAN", "A1", "1:100", "2026.11", "" },
+                new[] { "2", "S-102", "地下室二层人防核心筒及主楼转换层大跨度预应力梁板结构平面布置图（含节点详图与后浇带构造大样及配筋说明）", "A1", "1:100", "2026.11", "" },
+                new[] { "3", "S-103", "ROOF FLOOR PLAN\n(PART A & PART B)", "A1", "1:100", "2026.11", "" }
+            };
+
+            var longLayout = DrawingIndexTableLayoutService.ComputeLayout(headers, longRows, 100.0);
+            AssertTrue(longLayout.ColumnWidths[2] <= 185.0 * 100.0 + 0.01,
+                "Title column width should respect max cap 18500, got: " + longLayout.ColumnWidths[2]);
+            AssertTrue(longLayout.RowMaxLineCounts[2] >= 2,
+                "Ultra-long title should report >=2 wrapped lines, got: " + longLayout.RowMaxLineCounts[2]);
+            AssertTrue(longLayout.RowHeights[2] > longLayout.RowHeights[1] * 1.4,
+                string.Format("Wrapped row height ({0}) must expand significantly over single-line row ({1})", longLayout.RowHeights[2], longLayout.RowHeights[1]));
+            AssertTrue(longLayout.RowMaxLineCounts[3] >= 2 && longLayout.RowHeights[3] > longLayout.RowHeights[1] * 1.4,
+                "Explicit multi-line title must expand row height");
         }
     }
 }
