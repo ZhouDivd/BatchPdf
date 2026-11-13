@@ -44,6 +44,7 @@ namespace BatchPdf.Core.Tests
             RunTest("TitleBlockTextAnalyzer_BilingualLabelsAndCentering", TestTitleBlockTextAnalyzer_BilingualLabelsAndCentering);
             RunTest("TitleBlockTextAnalyzer_EnglishCellCenteredAndDrawingContentExclusion", TestTitleBlockTextAnalyzer_EnglishCellCenteredAndDrawingContentExclusion);
             RunTest("TitleBlockTextAnalyzer_RealWorldKeyPlanAndStackedTitleLabel", TestTitleBlockTextAnalyzer_RealWorldKeyPlanAndStackedTitleLabel);
+            RunTest("TitleBlockTextAnalyzer_RejectsStructuralMemberCodesAsDrawingNumber", TestTitleBlockTextAnalyzer_RejectsStructuralMemberCodesAsDrawingNumber);
             RunTest("TitleBlockTextAnalyzer_CustomFrameRuleTags", TestTitleBlockTextAnalyzer_CustomFrameRuleTags);
             RunTest("DrawingIndexTableLayoutService_AdaptiveColumnWidthAndRowHeight", TestDrawingIndexTableLayoutService_AdaptiveColumnWidthAndRowHeight);
             RunTest("SheetPreparationService_PaperSpaceLayoutSupport", TestSheetPreparationService_PaperSpaceLayoutSupport);
@@ -1325,6 +1326,54 @@ startxref
                 string.Format("Wrapped row height ({0}) must expand significantly over single-line row ({1})", longLayout.RowHeights[2], longLayout.RowHeights[1]));
             AssertTrue(longLayout.RowMaxLineCounts[3] >= 2 && longLayout.RowHeights[3] > longLayout.RowHeights[1] * 1.4,
                 "Explicit multi-line title must expand row height");
+        }
+
+        private static void TestTitleBlockTextAnalyzer_RejectsStructuralMemberCodesAsDrawingNumber()
+        {
+            AssertTrue(!TitleBlockTextAnalyzer.IsDrawingNumberText("GKZ40-1"), "GKZ40-1 must not be treated as drawing number");
+            AssertTrue(!TitleBlockTextAnalyzer.IsDrawingNumberText("GKL60-1"), "GKL60-1 must not be treated as drawing number");
+            AssertTrue(!TitleBlockTextAnalyzer.IsDrawingNumberText("GL40-1"), "GL40-1 must not be treated as drawing number");
+            AssertTrue(TitleBlockTextAnalyzer.IsDrawingNumberText("xxx-CD-STR-DRG-200"), "xxx-CD-STR-DRG-200 should be valid drawing number");
+
+            var analyzer = new TitleBlockTextAnalyzer();
+            var frame = new FrameCandidate
+            {
+                Corners = new Point2D[]
+                {
+                    new Point2D(-255208.6, 1982.4),
+                    new Point2D(-34408.6, 1982.4),
+                    new Point2D(-34408.6, 91082.4),
+                    new Point2D(-255208.6, 91082.4)
+                },
+                WcsBoundingBox = new Extents2D(-255208.6, 1982.4, -34408.6, 91082.4),
+                WidthDrawingUnits = 220800.0,
+                HeightDrawingUnits = 89100.0
+            };
+
+            var texts = new List<TitleTextItem>
+            {
+                // Structural tags in bottom/right of plan canvas (first in list, must be skipped!)
+                new TitleTextItem { Position = new Point2D(-160000.0, 10000.0), Text = "GKZ40-1", Height = 250.0, Layer = "平立面图梁柱撑编号" },
+                new TitleTextItem { Position = new Point2D(-65000.0, 12000.0), Text = "GKL60-1", Height = 250.0, Layer = "平立面图梁柱撑编号" },
+                // Job No. cell at bottom
+                new TitleTextItem { Position = new Point2D(-56962.2, 6881.5), Text = "Job", Height = 300.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(-56908.1, 6395.3), Text = "No. :", Height = 300.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(-52127.2, 5728.8), Text = "2026-JOB-99", Height = 600.0, Layer = "图框" },
+                // Drawing Number cell above Job No.
+                new TitleTextItem { Position = new Point2D(-56445.1, 9011.5), Text = "Drawing", Height = 300.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(-56391.0, 8525.3), Text = "Number :", Height = 300.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(-51033.8, 8388.5), Text = "xxx-CD-STR-DRG-200", Height = 600.0, Layer = "S-ANNO-TEXT" },
+                // Title cell
+                new TitleTextItem { Position = new Point2D(-56445.1, 27715.4), Text = "Drawing", Height = 300.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(-56817.9, 27229.2), Text = "Title :", Height = 300.0, Layer = "图框" },
+                new TitleTextItem { Position = new Point2D(-47832.1, 22596.8), Text = "1-ROOF FLOOR LAYOUT PLAN", Height = 750.0, Layer = "S-ANNO-TEXT" }
+            };
+
+            analyzer.EnrichFrame(frame, texts, BatchPdfSettings.CreateDefault().FrameRules);
+            AssertTrue(frame.ExtractedDrawingNumber == "xxx-CD-STR-DRG-200",
+                "Expected drawing number 'xxx-CD-STR-DRG-200' (not GKZ40-1 or Job No.), got: " + frame.ExtractedDrawingNumber);
+            AssertTrue(frame.ExtractedDrawingName == "1-ROOF FLOOR LAYOUT PLAN",
+                "Expected drawing name '1-ROOF FLOOR LAYOUT PLAN', got: " + frame.ExtractedDrawingName);
         }
     }
 }

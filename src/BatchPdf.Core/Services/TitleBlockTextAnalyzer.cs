@@ -103,7 +103,7 @@ namespace BatchPdf.Core.Services
             if (string.IsNullOrWhiteSpace(text)) return false;
             string s = text.Trim();
             if (s.Length < 2 || s.Length > 35) return false;
-            if (IgnoredTitleTexts.Contains(s) || IsPureLabelEnglishTranslation(s)) return false;
+            if (IsIgnoredOrPlaceholderTitleText(s) || IsPureLabelEnglishTranslation(s) || IsEngineeringDetailOrRebarAnnotation(s)) return false;
 
             // Reject pure date formats (e.g. 2023-10-25 or 2023.05)
             if (Regex.IsMatch(s, @"^\d{4}[-—_/\.]\d{1,2}(?:[-—_/\.]\d{1,2})?$")) return false;
@@ -259,8 +259,8 @@ namespace BatchPdf.Core.Services
             // 6. Concrete or rebar grades (C30, C35, C40, HRB400, HRB500, HPB300, Q235, Q345, Q355)
             if (Regex.IsMatch(s, @"^(?:C\d{2}|HRB\d{3}|HPB\d{3}|Q\d{3})\b", RegexOptions.IgnoreCase)) return true;
 
-            // 7. Structural member designations (KZ1, KL2, WKL3, XL1, GZ1, YBZ1, GBZ1, LL1)
-            if (Regex.IsMatch(s, @"^(?:KZ|KL|WKL|XL|GZ|YBZ|GBZ|LL|L)\d+\b", RegexOptions.IgnoreCase)) return true;
+            // 7. Structural member designations (KZ1, KL2, WKL3, XL1, GZ1, YBZ1, GBZ1, LL1, GKZ40-1, GKL60-1, GL40-1)
+            if (Regex.IsMatch(s, @"^(?:GKZ|GKL|GWL|KZL|WKL|YBZ|GBZ|LCZ|FBZ|JZL|BKL|KZ|KL|XL|GZ|TZ|AZ|DZ|GL|LL|QL|TL|DL|L)\d+(?:[-_./]\d+)*(?:\([A-Za-z0-9]+\))?\b", RegexOptions.IgnoreCase)) return true;
 
             // 8. Elevation marks (▽-0.050, ▽+3.600)
             if (s.Contains("▽") || Regex.IsMatch(s, @"^[\+\-]\d+\.\d{2,3}$")) return true;
@@ -515,11 +515,18 @@ namespace BatchPdf.Core.Services
                             frame.ExtractedDrawingNumber = val;
                         }
                     }
-                    else if (IsDrawingNumberLabel(clean, rules))
+                    else if (IsStackedDrawingNumberLabel(item, inFrameTexts))
                     {
-                        if (IsBetterLabelCandidate(item, numberLabelItem, box))
+                        numberLabelItem = item;
+                    }
+                    else if (IsDrawingNumberLabel(clean, rules) && !IsStackedUnderNonDrawingPrefix(item, inFrameTexts))
+                    {
+                        if (numberLabelItem == null || !IsStackedDrawingNumberLabel(numberLabelItem, inFrameTexts))
                         {
-                            numberLabelItem = item;
+                            if (IsBetterLabelCandidate(item, numberLabelItem, box))
+                            {
+                                numberLabelItem = item;
+                            }
                         }
                     }
                 }
@@ -719,19 +726,60 @@ namespace BatchPdf.Core.Services
                 }
             }
 
-            // 4. Drawing Number Standalone Regex Match inside titleblock zone
+            // 4. Drawing Number Standalone Regex Match inside titleblock zone (ranked by titleblock corner & layer)
             if (string.IsNullOrWhiteSpace(frame.ExtractedDrawingNumber))
             {
-                var titleZoneTexts = inFrameTexts
-                    .Where(t => IsInTitleblockZone(t.Position, box))
+                var numberCandidates = inFrameTexts
+                    .Where(t => IsInTitleblockZone(t.Position, box) && IsDrawingNumberText(t.Text))
                     .ToList();
 
-                var noCandidate = titleZoneTexts.FirstOrDefault(t => IsDrawingNumberText(t.Text)) ??
-                                  inFrameTexts.FirstOrDefault(t => IsTitleLayer(t.Layer) && IsDrawingNumberText(t.Text));
-
-                if (noCandidate != null)
+                if (numberCandidates.Count == 0)
                 {
-                    frame.ExtractedDrawingNumber = noCandidate.Text.Trim();
+                    numberCandidates = inFrameTexts
+                        .Where(t => IsTitleLayer(t.Layer) && IsDrawingNumberText(t.Text))
+                        .ToList();
+                }
+
+                if (numberCandidates.Count > 0)
+                {
+                    var rankedNo = numberCandidates
+                        .Select(t =>
+                        {
+                            double score = 0.0;
+                            string textVal = (t.Text ?? "").Trim();
+                            string layerUpper = (t.Layer ?? "").ToUpperInvariant();
+
+                            if (IsTitleLayer(t.Layer)) score += 1000.0;
+                            else if (layerUpper.Contains("ANNO") || layerUpper.Contains("TEXT")) score += 450.0;
+
+                            if (layerUpper.Contains("梁") || layerUpper.Contains("柱") || layerUpper.Contains("墙") ||
+                                layerUpper.Contains("板") || layerUpper.Contains("配筋") || layerUpper.Contains("编号") ||
+                                layerUpper.Contains("AXIS") || layerUpper.Contains("DIM") || layerUpper.Contains("REBAR") ||
+                                layerUpper.Contains("BEAM") || layerUpper.Contains("COL"))
+                            {
+                                score -= 800.0;
+                            }
+
+                            // Bottom-right titleblock corner bonus
+                            if (t.Position.X >= box.MinX + w * 0.55 && t.Position.Y <= box.MinY + h * 0.30)
+                            {
+                                score += 600.0;
+                            }
+
+                            if (Regex.Matches(textVal, @"[-_—]").Count >= 2 ||
+                                Regex.IsMatch(textVal, @"(?:DRG|DWG|STR|ARCH|结|建|施|电|水|暖)", RegexOptions.IgnoreCase))
+                            {
+                                score += 300.0;
+                            }
+
+                            score += Math.Min(t.Height, 1000.0) * 0.2;
+                            return new { Item = t, Score = score };
+                        })
+                        .OrderByDescending(x => x.Score)
+                        .ThenByDescending(x => x.Item.Height)
+                        .ToList();
+
+                    frame.ExtractedDrawingNumber = rankedNo[0].Item.Text.Trim();
                 }
             }
 
@@ -923,6 +971,42 @@ namespace BatchPdf.Core.Services
             }
 
             return bestCandidate;
+        }
+
+        private static bool IsStackedDrawingNumberLabel(TitleTextItem item, IList<TitleTextItem> allItems)
+        {
+            if (item == null || allItems == null) return false;
+            string norm = Regex.Replace(item.Text ?? "", @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+            if (norm != "NUMBER" && norm != "NO") return false;
+
+            double refH = Math.Max(item.Height, 2.5);
+            return allItems.Any(other =>
+            {
+                if (other == null || other == item) return false;
+                string upNorm = Regex.Replace(other.Text ?? "", @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+                if (upNorm != "DRAWING" && upNorm != "DWG" && upNorm != "SHEET") return false;
+                double dx = Math.Abs(other.Position.X - item.Position.X);
+                double dy = other.Position.Y - item.Position.Y;
+                return dx <= refH * 4.5 && dy > 0 && dy <= refH * 3.0;
+            });
+        }
+
+        private static bool IsStackedUnderNonDrawingPrefix(TitleTextItem item, IList<TitleTextItem> allItems)
+        {
+            if (item == null || allItems == null) return false;
+            string norm = Regex.Replace(item.Text ?? "", @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+            if (norm != "NUMBER" && norm != "NO") return false;
+
+            double refH = Math.Max(item.Height, 2.5);
+            return allItems.Any(other =>
+            {
+                if (other == null || other == item) return false;
+                string upNorm = Regex.Replace(other.Text ?? "", @"[\s:：_\-\./\\#]+", "").ToUpperInvariant();
+                if (upNorm != "JOB" && upNorm != "PROJECT" && upNorm != "CONTRACT" && upNorm != "REF") return false;
+                double dx = Math.Abs(other.Position.X - item.Position.X);
+                double dy = other.Position.Y - item.Position.Y;
+                return dx <= refH * 4.5 && dy > 0 && dy <= refH * 3.0;
+            });
         }
 
         public static bool IsDrawingNameLabel(string text, IList<FrameRule> rules = null)
