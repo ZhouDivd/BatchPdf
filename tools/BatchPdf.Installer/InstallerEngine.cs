@@ -114,7 +114,28 @@ namespace BatchPdf.Installer
                             Directory.CreateDirectory(parent);
                         }
 
-                        entry.ExtractToFile(destPath, overwrite: true);
+                        try
+                        {
+                            entry.ExtractToFile(destPath, overwrite: true);
+                        }
+                        catch (IOException)
+                        {
+                            if (File.Exists(destPath))
+                            {
+                                string backupPath = destPath + ".old";
+                                try
+                                {
+                                    if (File.Exists(backupPath)) File.Delete(backupPath);
+                                }
+                                catch
+                                {
+                                    backupPath = destPath + ".old." + DateTime.Now.ToString("yyyyMMddHHmmss");
+                                }
+                                File.Move(destPath, backupPath);
+                            }
+                            entry.ExtractToFile(destPath, overwrite: true);
+                            log("    [提示] 检测到占用文件，已安全替换（重启 AutoCAD 后生效）: " + entry.FullName);
+                        }
                     }
                 }
             }

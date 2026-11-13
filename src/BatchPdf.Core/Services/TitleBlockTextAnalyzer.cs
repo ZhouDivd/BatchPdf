@@ -38,6 +38,7 @@ namespace BatchPdf.Core.Services
             "SCALE", "SCALE:", "SCALE :", "BL", "DATE", "PROJECT", "CLIENT", "OWNER",
             "DESIGN", "DESIGNED", "DESIGNED BY", "DRAWN", "DRAWN BY", "CHECKED", "CHECKED BY", "APPROVED", "APPROVED BY",
             "CAD", "FILE", "FILENAME", "DESCRIPTION", "TBD", "N/A", "NA",
+            "DD", "SD", "CD", "IFC", "WIP",
             "TITRE", "DESSIN", "NOM DU DESSIN", "TITRE DU PLAN", "ECHELLE", "ÉCHELLE", "PROJET",
             // Common bilingual translations in parentheses or brackets
             "(DRAWING TITLE)", "（DRAWING TITLE）",

@@ -25,7 +25,7 @@ namespace BatchPdf.Installer
 
         private void InitializeComponent()
         {
-            this.Text = "BatchPdf - AutoCAD 批量出图利器 安装程序 v1.2.0";
+            this.Text = "BatchPdf - AutoCAD 批量出图利器 安装程序 v1.2.1";
             this.Size = new Size(680, 560);
             this.MinimumSize = new Size(600, 500);
             this.StartPosition = FormStartPosition.CenterScreen;
