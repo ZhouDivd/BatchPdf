@@ -1095,7 +1095,7 @@ namespace BatchPdf.UI.Forms
             var btnPrintPreview = CreateToolButton("👁️ 打印预览", 92, OnPlotPreviewSelectedSheetClick);
             var btnPreview = CreateToolButton("定位视图", 84, OnPreviewSelectedSheetClick);
             var btnTeach = CreateToolButton("🎯 拾取学习", 92, OnTeachFrameClick);
-            var btnCreateTable = CreateToolButton("📊 生成图纸目录", 112, OnCreateDrawingTableClick);
+            var btnCreateTable = CreateToolButton("📊 图纸目录 / Excel", 132, OnCreateDrawingTableClick);
             var btnManualAdd = CreateToolButton("手动拉框添加", 98, OnManualPickClick);
             var btnSelectAll = CreateToolButton("全选 (Ctrl+A)", 96, (s, e) => SetAllSelection(true));
             var btnInvert = CreateToolButton("反选 (Ctrl+Q)", 96, (s, e) => InvertSelection());
@@ -1215,7 +1215,7 @@ namespace BatchPdf.UI.Forms
             gridMenu.Items.Add("🔍 定位并缩放到图框", null, OnPreviewSelectedSheetClick);
             gridMenu.Items.Add(new ToolStripSeparator());
             gridMenu.Items.Add("🎯 点选学习图框 (BPTEACH)...", null, OnTeachFrameClick);
-            gridMenu.Items.Add("📊 在 CAD 中生成图纸目录表 (BPTABLE)...", null, OnCreateDrawingTableClick);
+            gridMenu.Items.Add("📊 核对并生成/导出图纸目录 (CAD / Excel)...", null, OnCreateDrawingTableClick);
             gridMenu.Items.Add(new ToolStripSeparator());
             gridMenu.Items.Add("🗑️ 从列表中移除选中图框 (Del)", null, OnDeleteSelectedClick);
             _gridSheets.ContextMenuStrip = gridMenu;
@@ -2458,7 +2458,40 @@ namespace BatchPdf.UI.Forms
         {
             if (_sheets == null || _sheets.Count == 0)
             {
-                MessageBox.Show(this, "当前清单中没有图纸，请先扫描图框。", "生成图纸目录", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "当前清单中没有图纸，请先扫描图框。", "图纸目录", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            List<DrawingIndexExportRow> rows = DrawingIndexRowBuilder.BuildFromSheets(_sheets);
+            if (rows.Count == 0)
+            {
+                MessageBox.Show(this, "没有可用于生成图纸目录的有效图框。", "图纸目录", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            DrawingIndexAction action;
+            IList<DrawingIndexExportRow> editedRows;
+
+            using (var confirmDlg = new DrawingIndexExportForm(rows))
+            {
+                DialogResult dr = confirmDlg.ShowDialog(this);
+                if (confirmDlg.HasSheetMetadataChanges)
+                {
+                    ReevaluateAllSheets(preserveCustomFileName: false);
+                }
+
+                if (dr != DialogResult.OK || confirmDlg.SelectedAction == DrawingIndexAction.Cancel)
+                {
+                    return;
+                }
+
+                action = confirmDlg.SelectedAction;
+                editedRows = confirmDlg.EditedRows;
+            }
+
+            if (action == DrawingIndexAction.ExportExcel)
+            {
+                ExportDrawingIndexToExcel(editedRows);
                 return;
             }
 
@@ -2470,7 +2503,7 @@ namespace BatchPdf.UI.Forms
                 AcEd.PromptPointResult ppr = ed.GetPoint(ppo);
                 if (ppr.Status != AcEd.PromptStatus.OK) return;
 
-                if (CadTableService.GenerateDrawingIndexTable(_doc, _sheets, _settings, ppr.Value, out string msg))
+                if (CadTableService.GenerateDrawingIndexTable(_doc, editedRows, _settings, ppr.Value, out string msg))
                 {
                     _lblCurrentTaskStatus.Text = msg;
                     MessageBox.Show(this, msg, "图纸目录已生成", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -2481,6 +2514,68 @@ namespace BatchPdf.UI.Forms
                     MessageBox.Show(this, msg, "生成失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             });
+        }
+
+        private void ExportDrawingIndexToExcel(IList<DrawingIndexExportRow> rows)
+        {
+            if (rows == null || rows.Count == 0) return;
+
+            string docDir = !string.IsNullOrWhiteSpace(_doc?.Name) && File.Exists(_doc.Name)
+                ? Path.GetDirectoryName(_doc.Name)
+                : "";
+            string defaultDir = (_txtOutputDir.Enabled && !string.IsNullOrWhiteSpace(_txtOutputDir.Text))
+                ? _txtOutputDir.Text.Trim()
+                : docDir;
+            if (string.IsNullOrWhiteSpace(defaultDir) || !Directory.Exists(defaultDir))
+            {
+                defaultDir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            }
+
+            string docBaseName = !string.IsNullOrWhiteSpace(_doc?.Name)
+                ? Path.GetFileNameWithoutExtension(_doc.Name)
+                : "图纸";
+            if (string.IsNullOrWhiteSpace(docBaseName)) docBaseName = "图纸";
+            string defaultFileName = NamingService.SanitizeComponent(docBaseName + "_图纸目录") + ".xlsx";
+
+            using (var sfd = new SaveFileDialog())
+            {
+                sfd.Title = "导出图纸目录 Excel 工作簿";
+                sfd.Filter = "Excel 工作簿 (*.xlsx)|*.xlsx";
+                sfd.DefaultExt = "xlsx";
+                sfd.InitialDirectory = defaultDir;
+                sfd.FileName = defaultFileName;
+                sfd.OverwritePrompt = true;
+
+                if (sfd.ShowDialog(this) != DialogResult.OK) return;
+
+                try
+                {
+                    DrawingIndexExcelExporter.ExportToXlsx(sfd.FileName, rows, "图纸目录");
+                    _lblCurrentTaskStatus.Text = string.Format("已导出 Excel 图纸目录 ({0} 张): {1}", rows.Count, sfd.FileName);
+
+                    DialogResult openAsk = MessageBox.Show(
+                        this,
+                        string.Format("已成功导出 Excel 图纸目录（共 {0} 张图纸）：\n{1}\n\n是否立即打开该 Excel 文件？", rows.Count, sfd.FileName),
+                        "导出成功",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Information);
+
+                    if (openAsk == DialogResult.Yes)
+                    {
+                        Process.Start(new ProcessStartInfo(sfd.FileName) { UseShellExecute = true });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _lblCurrentTaskStatus.Text = "导出 Excel 失败: " + ex.Message;
+                    MessageBox.Show(
+                        this,
+                        "导出 Excel 失败:\n" + ex.Message + "\n\n如果目标文件正在被 Excel/WPS 打开，请先关闭后重试。",
+                        "导出失败",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
         }
 
         private void OnOpenRulesClick(object sender, EventArgs e)

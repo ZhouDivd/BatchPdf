@@ -36,6 +36,7 @@
     <Compile Include="Models\PaperModels.cs" />
     <Compile Include="Models\FrameModels.cs" />
     <Compile Include="Models\PrintSheet.cs" />
+    <Compile Include="Models\DrawingIndexExportRow.cs" />
     <Compile Include="Models\JobResult.cs" />
     <Compile Include="Configuration\BatchPdfSettings.cs" />
     <Compile Include="Services\RectangleGeometryAnalyzer.cs" />

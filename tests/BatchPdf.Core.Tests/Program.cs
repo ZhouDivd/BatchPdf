@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml;
 using BatchPdf.Core.Configuration;
 using BatchPdf.Core.Models;
 using BatchPdf.Core.Services;
@@ -47,6 +49,8 @@ namespace BatchPdf.Core.Tests
             RunTest("TitleBlockTextAnalyzer_RejectsStructuralMemberCodesAsDrawingNumber", TestTitleBlockTextAnalyzer_RejectsStructuralMemberCodesAsDrawingNumber);
             RunTest("TitleBlockTextAnalyzer_CustomFrameRuleTags", TestTitleBlockTextAnalyzer_CustomFrameRuleTags);
             RunTest("DrawingIndexTableLayoutService_AdaptiveColumnWidthAndRowHeight", TestDrawingIndexTableLayoutService_AdaptiveColumnWidthAndRowHeight);
+            RunTest("DrawingIndexRowBuilder_BuildsAndExtractsCleanPaperAndNormalizesLines", TestDrawingIndexRowBuilder_BuildsAndExtractsCleanPaperAndNormalizesLines);
+            RunTest("DrawingIndexExcelExporter_ProducesValidXlsxWithUnicodeAndXmlEscaping", TestDrawingIndexExcelExporter_ProducesValidXlsxWithUnicodeAndXmlEscaping);
             RunTest("SheetPreparationService_PaperSpaceLayoutSupport", TestSheetPreparationService_PaperSpaceLayoutSupport);
 
             Console.WriteLine("---------------------------------------------------------");
@@ -1374,6 +1378,126 @@ startxref
                 "Expected drawing number 'xxx-CD-STR-DRG-200' (not GKZ40-1 or Job No.), got: " + frame.ExtractedDrawingNumber);
             AssertTrue(frame.ExtractedDrawingName == "1-ROOF FLOOR LAYOUT PLAN",
                 "Expected drawing name '1-ROOF FLOOR LAYOUT PLAN', got: " + frame.ExtractedDrawingName);
+        }
+
+        private static void TestDrawingIndexRowBuilder_BuildsAndExtractsCleanPaperAndNormalizesLines()
+        {
+            var sheets = new List<PrintSheet>
+            {
+                new PrintSheet
+                {
+                    OrderIndex = 2,
+                    IsSelected = true,
+                    DrawingNumber = "S-02",
+                    DrawingName = "柴发结构平面图\\P(一层夹层)",
+                    TargetPaperLocaleName = "ISO A1 加长 (841x1189 毫米)",
+                    ScaleValue = 100
+                },
+                new PrintSheet
+                {
+                    OrderIndex = 1,
+                    IsSelected = false,
+                    DrawingNumber = "S-00",
+                    DrawingName = "Unselected",
+                    TargetPaperLocaleName = "ISO A3 (420x297)"
+                },
+                new PrintSheet
+                {
+                    OrderIndex = 1,
+                    IsSelected = true,
+                    DrawingNumber = "S-01",
+                    DrawingName = "沙巴机房楼结构平面图",
+                    TargetPaperLocaleName = "ISO A1 (841x594)",
+                    FitToPaper = true
+                }
+            };
+
+            var rows = DrawingIndexRowBuilder.BuildFromSheets(sheets, "2026.11");
+            AssertTrue(rows.Count == 2, "Expected 2 selected rows, got: " + rows.Count);
+            AssertTrue(rows[0].Index == 1 && rows[0].DrawingNumber == "S-01", "First row should follow OrderIndex 1");
+            AssertTrue(rows[0].PaperSize == "A1" && rows[0].Scale == "Fit", "Row 0 paper/scale mismatch");
+            AssertTrue(rows[1].Index == 2 && rows[1].DrawingNumber == "S-02", "Second row should be OrderIndex 2");
+            AssertTrue(rows[1].PaperSize == "A1加长" && rows[1].Scale == "1:100", "Row 1 paper/scale mismatch");
+            AssertTrue(rows[1].DrawingName == "柴发结构平面图\n(一层夹层)", "Expected \\P normalized to newline");
+            AssertTrue(rows[1].IssueDate == "2026.11", "IssueDate should apply default");
+        }
+
+        private static void TestDrawingIndexExcelExporter_ProducesValidXlsxWithUnicodeAndXmlEscaping()
+        {
+            string tempXlsx = Path.Combine(Path.GetTempPath(), "batchpdf_test_" + Guid.NewGuid().ToString("N") + ".xlsx");
+            try
+            {
+                var rows = new List<DrawingIndexExportRow>
+                {
+                    new DrawingIndexExportRow
+                    {
+                        Index = 1,
+                        DrawingNumber = "IRIS-STR-DRG-001",
+                        DrawingName = "沙巴机房楼结构平面图 & 地基<基础> \"A&B\" 图",
+                        PaperSize = "A1",
+                        Scale = "1:100",
+                        IssueDate = "2026.11",
+                        Remarks = "待审\x01\n含多行说明"
+                    },
+                    new DrawingIndexExportRow
+                    {
+                        Index = 2,
+                        DrawingNumber = "IRIS-STR-DRG-002",
+                        DrawingName = "柴发结构平面图 (含超长名称测试 1-ROOF FLOOR LAYOUT PLAN)",
+                        PaperSize = "A1加长",
+                        Scale = "1:50",
+                        IssueDate = "2026.11",
+                        Remarks = ""
+                    }
+                };
+
+                DrawingIndexExcelExporter.ExportToXlsx(tempXlsx, rows, "图纸目录/Sheet:[1]");
+                AssertTrue(File.Exists(tempXlsx), "Expected xlsx file to be created");
+
+                string[] requiredParts =
+                {
+                    "[Content_Types].xml",
+                    "_rels/.rels",
+                    "xl/_rels/workbook.xml.rels",
+                    "xl/workbook.xml",
+                    "xl/styles.xml",
+                    "xl/worksheets/sheet1.xml"
+                };
+
+                using (var fs = File.OpenRead(tempXlsx))
+                using (var archive = new ZipArchive(fs, ZipArchiveMode.Read))
+                {
+                    foreach (string part in requiredParts)
+                    {
+                        var entry = archive.GetEntry(part);
+                        AssertTrue(entry != null, "Missing OpenXML part: " + part);
+
+                        using (var s = entry.Open())
+                        {
+                            var doc = new XmlDocument();
+                            doc.Load(s); // Must parse strictly as valid XML
+                            if (part == "xl/workbook.xml")
+                            {
+                                string inner = doc.OuterXml;
+                                AssertTrue(inner.Contains("图纸目录Sheet1"), "Invalid sheet name chars must be sanitized: " + inner);
+                            }
+                            else if (part == "xl/worksheets/sheet1.xml")
+                            {
+                                string xml = doc.OuterXml;
+                                AssertTrue(xml.Contains("<cols>") && xml.Contains("customWidth=\"1\""), "Expected auto-sized columns");
+                                AssertTrue(xml.Contains("沙巴机房楼结构平面图 &amp; 地基&lt;基础&gt; \"A&amp;B\" 图"), "Expected XML-escaped CJK title");
+                                AssertTrue(xml.Contains("IRIS-STR-DRG-002"), "Expected second drawing number");
+                                AssertTrue(xml.Contains("<v>1</v>") && xml.Contains("<v>2</v>"), "Expected numeric row indices");
+                                AssertTrue(!xml.Contains("\x01"), "Control characters must be stripped for valid XML");
+                            }
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                if (File.Exists(tempXlsx)) File.Delete(tempXlsx);
+            }
         }
     }
 }

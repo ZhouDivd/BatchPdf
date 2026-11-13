@@ -30,6 +30,7 @@
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.IO.Compression" />
     <Reference Include="System.Web.Extensions" />
   </ItemGroup>
   <ItemGroup>
@@ -40,6 +41,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Services\ConfigService.cs" />
+    <Compile Include="Services\DrawingIndexExcelExporter.cs" />
     <Compile Include="Services\LogService.cs" />
     <Compile Include="Services\PdfPageCombiner.cs" />
     <Compile Include="Services\PdfPageCropper.cs" />

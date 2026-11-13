@@ -23,6 +23,17 @@ namespace BatchPdf.AutoCAD.Services
             Point3d origin,
             out string message)
         {
+            var rows = DrawingIndexRowBuilder.BuildFromSheets(sheets);
+            return GenerateDrawingIndexTable(doc, rows, settings, origin, out message);
+        }
+
+        public static bool GenerateDrawingIndexTable(
+            Document doc,
+            IList<DrawingIndexExportRow> rows,
+            BatchPdfSettings settings,
+            Point3d origin,
+            out string message)
+        {
             message = "";
             if (doc == null)
             {
@@ -30,16 +41,11 @@ namespace BatchPdf.AutoCAD.Services
                 return false;
             }
 
-            var validSheets = sheets != null
-                ? sheets.Where(s => s != null && s.IsSelected).OrderBy(s => s.OrderIndex).ToList()
-                : new List<PrintSheet>();
+            var validRows = rows != null
+                ? rows.Where(r => r != null).ToList()
+                : new List<DrawingIndexExportRow>();
 
-            if (validSheets.Count == 0 && sheets != null && sheets.Count > 0)
-            {
-                validSheets = sheets.Where(s => s != null).OrderBy(s => s.OrderIndex).ToList();
-            }
-
-            if (validSheets.Count == 0)
+            if (validRows.Count == 0)
             {
                 message = "图纸清单为空，无法生成图纸目录。";
                 return false;
@@ -57,46 +63,25 @@ namespace BatchPdf.AutoCAD.Services
                     tb.Position = origin;
                     tb.SetDatabaseDefaults();
 
-                    // Estimate scale factor based on drawing units or first scaled sheet
-                    double scaleFactor = 100.0;
-                    var firstScaled = validSheets.FirstOrDefault(s => s.ScaleValue.HasValue && s.ScaleValue.Value > 0);
-                    if (firstScaled != null && firstScaled.ScaleValue.HasValue)
-                    {
-                        scaleFactor = firstScaled.ScaleValue.Value;
-                    }
-                    else if (settings != null && settings.DefaultScaleValue > 0)
-                    {
-                        scaleFactor = settings.DefaultScaleValue;
-                    }
+                    // Estimate scale factor based on first row's source sheet or scale text, fallback to settings
+                    double scaleFactor = ResolveScaleFactor(validRows, settings);
+                    string[] headers = DrawingIndexRowBuilder.Headers;
 
-                    string[] headers = new string[] { "序号", "图号", "图纸名称", "图幅", "比例", "出图日期", "备注" };
-                    string defaultIssueDate = DateTime.Now.ToString("yyyy.MM");
-
-                    var rowStrings = new List<string[]>(validSheets.Count);
-                    for (int r = 0; r < validSheets.Count; r++)
+                    var rowStrings = new List<string[]>(validRows.Count);
+                    for (int r = 0; r < validRows.Count; r++)
                     {
-                        var s = validSheets[r];
-                        string paperStr = !string.IsNullOrWhiteSpace(s.TargetPaperLocaleName)
-                            ? ExtractCleanPaperName(s.TargetPaperLocaleName)
-                            : s.FormattedGeometryInfo;
-                        string scaleStr = s.ScaleValue.HasValue && s.ScaleValue.Value > 0
-                            ? string.Format("1:{0:G}", s.ScaleValue.Value)
-                            : (s.FitToPaper ? "Fit" : "-");
-
-                        rowStrings.Add(new[]
+                        var row = validRows[r];
+                        string[] cells = row.ToCellArray();
+                        cells[0] = (row.Index > 0 ? row.Index : (r + 1)).ToString();
+                        for (int c = 1; c < cells.Length; c++)
                         {
-                            (r + 1).ToString(),
-                            (s.DrawingNumber ?? "").Trim(),
-                            (s.DrawingName ?? "").Trim(),
-                            (paperStr ?? "").Trim(),
-                            scaleStr,
-                            defaultIssueDate,
-                            ""
-                        });
+                            cells[c] = (cells[c] ?? "").Replace("\r\n", "\n").Replace("\n", "\\P");
+                        }
+                        rowStrings.Add(cells);
                     }
 
                     DrawingIndexTableLayout layout = DrawingIndexTableLayoutService.ComputeLayout(headers, rowStrings, scaleFactor);
-                    int totalRows = validSheets.Count + 1; // Row 0 = Header
+                    int totalRows = validRows.Count + 1; // Row 0 = Header
                     int totalCols = headers.Length;
 
                     tb.SuppressRegenerateTable(true);
@@ -176,7 +161,7 @@ namespace BatchPdf.AutoCAD.Services
                     tr.AddNewlyCreatedDBObject(tb, true);
                     tr.Commit();
 
-                    message = string.Format("已成功生成 CAD 图纸目录表，共 {0} 张图纸。", validSheets.Count);
+                    message = string.Format("已成功生成 CAD 图纸目录表，共 {0} 张图纸。", validRows.Count);
                     return true;
                 }
                 catch (Exception ex)
@@ -185,6 +170,26 @@ namespace BatchPdf.AutoCAD.Services
                     return false;
                 }
             }
+        }
+
+        private static double ResolveScaleFactor(IList<DrawingIndexExportRow> rows, BatchPdfSettings settings)
+        {
+            foreach (var row in rows)
+            {
+                if (row?.SourceSheet?.ScaleValue is double sv && sv > 0)
+                {
+                    return sv;
+                }
+                double? parsed = ScaleParser.TryParseScaleValue(row?.Scale);
+                if (parsed.HasValue && parsed.Value > 0)
+                {
+                    return parsed.Value;
+                }
+            }
+
+            return (settings != null && settings.DefaultScaleValue > 0)
+                ? settings.DefaultScaleValue
+                : 100.0;
         }
 
         private static void ApplyCellMargins(Table tb, int row, int col, double horzMargin, double vertMargin)
@@ -198,22 +203,6 @@ namespace BatchPdf.AutoCAD.Services
                 cell.Borders.Bottom.Margin = vertMargin;
             }
             catch { }
-        }
-
-        private static string ExtractCleanPaperName(string localeName)
-        {
-            if (string.IsNullOrWhiteSpace(localeName)) return "";
-            string suffix = localeName.IndexOf("加长", StringComparison.OrdinalIgnoreCase) >= 0 ? "加长" : "";
-            string[] bases = { "A0", "A1", "A2", "A3", "A4" };
-            foreach (string b in bases)
-            {
-                if (localeName.IndexOf(b, StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    return b + suffix;
-                }
-            }
-
-            return localeName.Split('(')[0].Trim();
         }
     }
 }

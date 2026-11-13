@@ -128,11 +128,18 @@ BatchPdf.sln
 ```powershell
 & "bin/Release/Tests/BatchPdf.Core.Tests.exe"
 ```
-确保几何分析、加长图幅匹配、双语图签过滤与目录表自适应布局等 28 项单元测试全部通过。
+确保几何分析、加长图幅匹配、双语图签过滤、目录表自适应布局与 Excel OpenXML 导出等 31 项单元测试全部通过。
 
 ---
 
 ## 📝 更新日志 (Changelog)
+
+### v1.2.2 (2026-11-13)
+* **新增图纸目录核对与 Excel (`.xlsx`) 导出功能**：
+  * 新增导出前人工核对与内联修改窗口（`DrawingIndexExportForm`），支持在导出前核查、补全或修正 `图号`、`图纸名称`、`图幅`、`比例`、`出图日期` 与 `备注`，空白图号/图名自动高亮提醒，修改实时同步回主清单；
+  * 新增纯 .NET 零依赖标准 OpenXML 工作簿导出器（`DrawingIndexExcelExporter`），兼容 Microsoft Excel、WPS 与在线表格（飞书/腾讯文档等）直接导入，自动冻结首行表头并自适应列宽与行高；
+  * 支持将核对/修改后的表格一键复制为制表符格式（可直接 `Ctrl+V` 贴入网页在线表格）或继续在 CAD 中生成自适应图纸目录表（`CadTableService`）。
+* **图号识别进一步加固（延续自 v1.2.1 后半段修复）**：排除结构构件编号（`GKZ40-1`、`GKL`、`GL` 等）与 `Job No.` 误识别。
 
 ### v1.2.1 (2026-11-13)
 * **优化图名/图号识别引擎 (`TitleBlockTextAnalyzer` / `FrameScanner`)**：

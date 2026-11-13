@@ -67,6 +67,9 @@
     <Compile Include="Forms\FrameRulesForm.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Include="Forms\DrawingIndexExportForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Forms\BatchPdfForm.cs">
       <SubType>Form</SubType>
     </Compile>
